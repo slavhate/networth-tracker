@@ -1,12 +1,12 @@
 # Net Worth Tracker
 
-A professional, full-featured web application for tracking personal net worth with a beautiful visualization dashboard. Features Indian Rupee (INR) currency support, dark mode, and comprehensive financial management.
+A professional, full-featured web application for tracking personal net worth with a beautiful visualization dashboard. Features Indian Rupee (INR) currency support, dark mode, and comprehensive financial visualization.
 
 ![Net Worth Tracker](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Vibe Coded](https://img.shields.io/badge/vibe%20coded-with%20Claude-blueviolet.svg)
 
-> **[View Sample Dashboard Screenshot](#)** *(Add your hosted screenshot link here)*
+![Net Worth Dashboard](/images/dashboard.png)
 
 ## About This Project
 
@@ -73,7 +73,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Infrastructure
 - **Docker** - Containerization
 - **Docker Compose** - Multi-container orchestration
-- **Nginx** - Production web server
+- **Nginx** - web server (for HTTPS if needed)
 
 ## Quick Start
 
