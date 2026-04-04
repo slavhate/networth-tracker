@@ -75,6 +75,7 @@ export default function Insurances() {
     provider: '',
     policy_number: '',
     premium: '',
+    premium_frequency: 'yearly',
     sum_assured: '',
     start_date: '',
     end_date: '',
@@ -108,6 +109,7 @@ export default function Insurances() {
         provider: insurance.provider,
         policy_number: insurance.policy_number || '',
         premium: insurance.premium.toString(),
+        premium_frequency: insurance.premium_frequency || 'yearly',
         sum_assured: insurance.sum_assured.toString(),
         start_date: insurance.start_date || '',
         end_date: insurance.end_date || '',
@@ -121,6 +123,7 @@ export default function Insurances() {
         provider: '',
         policy_number: '',
         premium: '',
+        premium_frequency: 'yearly',
         sum_assured: '',
         start_date: '',
         end_date: '',
@@ -140,6 +143,7 @@ export default function Insurances() {
       provider: '',
       policy_number: '',
       premium: '',
+      premium_frequency: 'yearly',
       sum_assured: '',
       start_date: '',
       end_date: '',
@@ -159,6 +163,7 @@ export default function Insurances() {
         provider: formData.provider,
         policy_number: formData.policy_number || null,
         premium: parseFloat(formData.premium),
+        premium_frequency: formData.premium_frequency,
         sum_assured: parseFloat(formData.sum_assured),
         start_date: formData.start_date || null,
         end_date: formData.end_date || null,
@@ -191,7 +196,11 @@ export default function Insurances() {
     }
   };
 
-  const totalPremium = insurances.reduce((sum, ins) => sum + ins.premium, 0);
+  // Calculate annual premium (normalize monthly to yearly)
+  const totalPremium = insurances.reduce((sum, ins) => {
+    const annualPremium = ins.premium_frequency === 'monthly' ? ins.premium * 12 : ins.premium;
+    return sum + annualPremium;
+  }, 0);
   const totalCoverage = insurances.reduce((sum, ins) => sum + ins.sum_assured, 0);
   const expiringCount = insurances.filter(ins => {
     const days = getDaysUntilExpiry(ins.end_date);
@@ -310,7 +319,7 @@ export default function Insurances() {
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(insurance.sum_assured)}</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Premium: {formatCurrency(insurance.premium)}/yr</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Premium: {formatCurrency(insurance.premium)}/{insurance.premium_frequency === 'monthly' ? 'mo' : 'yr'}</p>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
                     <button
@@ -403,9 +412,9 @@ export default function Insurances() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Premium (₹/year)</label>
+                  <label className="label">Premium (₹)</label>
                   <input
                     type="number"
                     className="input"
@@ -416,6 +425,17 @@ export default function Insurances() {
                     onChange={(e) => setFormData({ ...formData, premium: e.target.value })}
                     required
                   />
+                </div>
+                <div>
+                  <label className="label">Frequency</label>
+                  <select
+                    className="input"
+                    value={formData.premium_frequency}
+                    onChange={(e) => setFormData({ ...formData, premium_frequency: e.target.value })}
+                  >
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
                 </div>
                 <div>
                   <label className="label">Sum Assured (₹)</label>

@@ -150,7 +150,7 @@ class InsuranceType(str, Enum):
 class InsuranceBase(BaseModel):
     policy_name: str = Field(..., min_length=1, max_length=100)
     provider: str = Field(..., min_length=1, max_length=100)
-    policy_number: str
+    policy_number: Optional[str] = None
     insurance_type: InsuranceType
     sum_assured: float = Field(..., ge=0)
     premium: float = Field(..., ge=0)
@@ -158,6 +158,7 @@ class InsuranceBase(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     nominee: Optional[str] = None
+    notes: Optional[str] = None
 
 class Insurance(InsuranceBase):
     id: str
@@ -179,6 +180,8 @@ class InsuranceUpdate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     nominee: Optional[str] = None
+    notes: Optional[str] = None
+    nominee: Optional[str] = None
 
 # Mutual Fund Models
 class MutualFundCategory(str, Enum):
@@ -195,8 +198,8 @@ class MutualFundBase(BaseModel):
     amc: str = Field(..., min_length=1, max_length=100)  # Asset Management Company
     category: MutualFundCategory
     folio_number: Optional[str] = None
-    units: float = Field(..., ge=0)
-    nav: float = Field(..., ge=0)  # Net Asset Value
+    units: float = Field(default=0, ge=0)
+    nav: float = Field(default=0, ge=0)  # Net Asset Value
     invested_amount: float = Field(..., ge=0)
     current_value: float = Field(..., ge=0)
     sip_amount: Optional[float] = None  # SIP amount if applicable

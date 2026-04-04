@@ -131,8 +131,8 @@ export default function MutualFunds() {
         category: formData.category,
         invested_amount: parseFloat(formData.invested_amount),
         current_value: parseFloat(formData.current_value),
-        units: formData.units ? parseFloat(formData.units) : null,
-        nav: formData.nav ? parseFloat(formData.nav) : null,
+        units: formData.units ? parseFloat(formData.units) : 0,
+        nav: formData.nav ? parseFloat(formData.nav) : 0,
         folio_number: formData.folio_number || null
       };
 
