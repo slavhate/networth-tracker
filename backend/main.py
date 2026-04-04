@@ -22,6 +22,7 @@ from auth import (
 )
 import database as db
 import stock_service
+import exchange_service
 
 app = FastAPI(
     title="Net Worth Tracker API",
@@ -169,6 +170,12 @@ async def delete_liability(liability_id: str, user_id: str = Depends(get_user_id
 
 # ============== Dashboard & Metrics Routes ==============
 
+@app.get("/api/exchange-rate")
+async def get_exchange_rate():
+    """Get current USD to INR exchange rate"""
+    rate = await exchange_service.fetch_usd_to_inr()
+    return {"usd_to_inr": rate}
+
 @app.get("/api/dashboard", response_model=DashboardMetrics)
 async def get_dashboard(user_id: str = Depends(get_user_id)):
     """Get dashboard metrics and data"""
@@ -177,8 +184,15 @@ async def get_dashboard(user_id: str = Depends(get_user_id)):
     snapshots = db.get_snapshots_by_user(user_id)
     equities = db.get_equities_by_user(user_id)
     
+    # Get live USD to INR rate
+    usd_to_inr = await exchange_service.fetch_usd_to_inr()
+    
     total_assets = sum(a["value"] for a in assets)
-    total_equities = sum(e["current_value"] for e in equities)
+    # Convert NASDAQ equities from USD to INR
+    total_equities = sum(
+        e["current_value"] * usd_to_inr if e.get("market") == "NASDAQ" else e["current_value"] 
+        for e in equities
+    )
     total_assets_with_equities = total_assets + total_equities
     total_liabilities = sum(l["amount"] for l in liabilities)
     net_worth = total_assets_with_equities - total_liabilities
@@ -225,7 +239,15 @@ async def create_snapshot(user_id: str = Depends(get_user_id)):
     liabilities = db.get_liabilities_by_user(user_id)
     equities = db.get_equities_by_user(user_id)
     
-    total_assets = sum(a["value"] for a in assets) + sum(e["current_value"] for e in equities)
+    # Get live USD to INR rate
+    usd_to_inr = await exchange_service.fetch_usd_to_inr()
+    
+    # Convert NASDAQ equities from USD to INR
+    total_equities = sum(
+        e["current_value"] * usd_to_inr if e.get("market") == "NASDAQ" else e["current_value"] 
+        for e in equities
+    )
+    total_assets = sum(a["value"] for a in assets) + total_equities
     total_liabilities = sum(l["amount"] for l in liabilities)
     
     snapshot = db.create_snapshot(user_id, total_assets, total_liabilities)

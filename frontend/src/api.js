@@ -110,6 +110,11 @@ export const dashboardAPI = {
   createSnapshot: () => api.post('/api/snapshot'),
 };
 
+// Exchange Rate API
+export const exchangeAPI = {
+  getRate: () => api.get('/api/exchange-rate'),
+};
+
 // Goal API
 export const goalAPI = {
   get: () => api.get('/api/goal'),

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { equitiesAPI } from '../api';
+import { equitiesAPI, exchangeAPI } from '../api';
 import { 
   Plus, 
   Edit2, 
@@ -16,6 +16,9 @@ const MARKETS = [
   { value: 'BSE', label: 'BSE (India)', color: 'bg-purple-100 text-purple-600 dark:bg-purple-900/50 dark:text-purple-400' },
   { value: 'NASDAQ', label: 'NASDAQ (US)', color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
 ];
+
+// Default rate (fallback)
+const DEFAULT_USD_TO_INR = 83.5;
 
 const getMarketInfo = (value) => MARKETS.find(m => m.value === value) || MARKETS[0];
 
@@ -46,6 +49,7 @@ export default function Equities() {
   const [equities, setEquities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [usdToInr, setUsdToInr] = useState(DEFAULT_USD_TO_INR);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEquity, setEditingEquity] = useState(null);
   const [formData, setFormData] = useState({
@@ -74,8 +78,21 @@ export default function Equities() {
     }
   };
 
+  const fetchExchangeRate = async () => {
+    try {
+      const response = await exchangeAPI.getRate();
+      if (response.data?.usd_to_inr) {
+        setUsdToInr(response.data.usd_to_inr);
+      }
+    } catch (err) {
+      // Use default rate if API fails
+      console.warn('Failed to fetch exchange rate, using default');
+    }
+  };
+
   useEffect(() => {
     fetchEquities(true); // Refresh prices on initial load
+    fetchExchangeRate();  // Get current exchange rate
   }, []);
 
   const handleRefreshPrices = () => {
@@ -166,10 +183,17 @@ export default function Equities() {
     }
   };
 
-  const totalInvested = equities.reduce((sum, e) => sum + e.invested_amount, 0);
-  const totalCurrentValue = equities.reduce((sum, e) => sum + e.current_value, 0);
-  const totalGainLoss = totalCurrentValue - totalInvested;
-  const overallReturnPercent = totalInvested > 0 ? ((totalCurrentValue - totalInvested) / totalInvested) * 100 : 0;
+  // Calculate totals in INR (convert NASDAQ USD to INR)
+  const totalInvestedINR = equities.reduce((sum, e) => {
+    const amount = e.market === 'NASDAQ' ? e.invested_amount * usdToInr : e.invested_amount;
+    return sum + amount;
+  }, 0);
+  const totalCurrentValueINR = equities.reduce((sum, e) => {
+    const amount = e.market === 'NASDAQ' ? e.current_value * usdToInr : e.current_value;
+    return sum + amount;
+  }, 0);
+  const totalGainLossINR = totalCurrentValueINR - totalInvestedINR;
+  const overallReturnPercent = totalInvestedINR > 0 ? ((totalCurrentValueINR - totalInvestedINR) / totalInvestedINR) * 100 : 0;
 
   if (loading) {
     return (
@@ -209,7 +233,8 @@ export default function Equities() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-blue-100 font-medium">Invested</p>
-              <p className="text-xl font-bold mt-1">{formatCurrency(totalInvested)}</p>
+              <p className="text-xl font-bold mt-1">{formatCurrency(totalInvestedINR)}</p>
+              <p className="text-xs text-blue-200 mt-0.5">All markets in INR</p>
             </div>
             <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
               <BarChart3 className="w-5 h-5" />
@@ -221,7 +246,8 @@ export default function Equities() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-green-100 font-medium">Current Value</p>
-              <p className="text-xl font-bold mt-1">{formatCurrency(totalCurrentValue)}</p>
+              <p className="text-xl font-bold mt-1">{formatCurrency(totalCurrentValueINR)}</p>
+              <p className="text-xs text-green-200 mt-0.5">USD @ ₹{usdToInr.toFixed(2)}</p>
             </div>
             <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
               <TrendingUp className="w-5 h-5" />
@@ -229,16 +255,16 @@ export default function Equities() {
           </div>
         </div>
 
-        <div className={`card ${totalGainLoss >= 0 ? 'bg-gradient-to-r from-emerald-500 to-emerald-600' : 'bg-gradient-to-r from-red-500 to-red-600'} text-white`}>
+        <div className={`card ${totalGainLossINR >= 0 ? 'bg-gradient-to-r from-emerald-500 to-emerald-600' : 'bg-gradient-to-r from-red-500 to-red-600'} text-white`}>
           <div className="flex items-center justify-between">
             <div>
-              <p className={`${totalGainLoss >= 0 ? 'text-emerald-100' : 'text-red-100'} font-medium`}>
-                {totalGainLoss >= 0 ? 'Profit' : 'Loss'}
+              <p className={`${totalGainLossINR >= 0 ? 'text-emerald-100' : 'text-red-100'} font-medium`}>
+                {totalGainLossINR >= 0 ? 'Profit' : 'Loss'}
               </p>
-              <p className="text-xl font-bold mt-1">{formatCurrency(Math.abs(totalGainLoss))}</p>
+              <p className="text-xl font-bold mt-1">{formatCurrency(Math.abs(totalGainLossINR))}</p>
             </div>
             <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              {totalGainLoss >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
+              {totalGainLossINR >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
             </div>
           </div>
         </div>
