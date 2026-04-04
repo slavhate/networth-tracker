@@ -73,7 +73,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Infrastructure
 - **Docker** - Containerization
 - **Docker Compose** - Multi-container orchestration
-- **Nginx** - web server (for HTTPS if needed)
+- **Nginx** - Production web server
 
 ## Quick Start
 
