@@ -20,6 +20,8 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Core Features
 - **User Authentication** - Secure JWT-based authentication with registration and login
 - **Dark Mode** - Toggle between light and dark themes
+- **Privacy Mode** - Mask all financial numbers with one click (default ON for security)
+- **Last Updated Timestamp** - Shows when data was last refreshed in the sidebar
 - **Responsive Design** - Works beautifully on desktop and mobile
 - **Containerized** - Easy deployment with Docker
 
@@ -29,9 +31,16 @@ A professional, full-featured web application for tracking personal net worth wi
 
 ### Financial Sections
 - **Bank Accounts** - Track savings, current, salary, and fixed deposit accounts across banks
-- **Insurances** - Manage life, health, term, vehicle, and property insurance policies with premium tracking
-- **Mutual Funds** - Track mutual fund investments with NAV updates and returns calculations
-- **Equities** - Stock portfolio management with live price fetching from NSE, BSE, and NASDAQ markets via Yahoo Finance
+- **Insurances** - Manage life, health, term, vehicle, and property insurance policies with premium tracking (monthly/yearly frequency support)
+- **Mutual Funds** - Track mutual fund investments with:
+  - **Auto NAV Fetching** from mfapi.in (free API, no rate limits)
+  - Avg NAV (purchase price) and Current NAV tracking
+  - Auto-calculation of current value from units × current NAV
+  - "Refresh NAV" button to update all fund values
+- **Equities** - Stock portfolio management with:
+  - Live price fetching from NSE, BSE, and NASDAQ via Yahoo Finance
+  - Manual LTP (Last Traded Price) entry option
+  - USD to INR conversion for NASDAQ stocks
 
 ### Dashboard & Goals
 - **Net Worth Dashboard**:
@@ -50,6 +59,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Currency & Localization
 - **Indian Rupee (INR)** - Primary currency with proper Indian number formatting (lakhs, crores)
 - **USD Support** - For NASDAQ-listed stocks
+- **Live Exchange Rate** - USD to INR conversion fetched from free APIs (exchangerate-api.com, frankfurter.app) with 1-hour caching
 
 ## Tech Stack
 
@@ -58,7 +68,11 @@ A professional, full-featured web application for tracking personal net worth wi
 - **Pydantic** - Data validation
 - **JWT** - Authentication tokens
 - **passlib + bcrypt** - Password hashing (bcrypt 4.0.1 pinned for compatibility)
-- **yfinance** - Live stock price fetching from Yahoo Finance (NSE, BSE, NASDAQ)
+- **httpx** - Async HTTP client for external API calls
+- **External APIs**:
+  - Yahoo Finance - Live stock prices (NSE, BSE, NASDAQ)
+  - mfapi.in - Mutual fund NAV data (free, no API key required)
+  - Exchange Rate APIs - Live USD to INR conversion
 
 ### Frontend
 - **React 18** - UI framework
@@ -68,7 +82,7 @@ A professional, full-featured web application for tracking personal net worth wi
 - **Lucide React** - Icons
 - **Axios** - HTTP client
 - **React Router** - Navigation
-- **Context API** - Theme and auth state management
+- **Context API** - Theme, auth, and privacy state management
 
 ### Infrastructure
 - **Docker** - Containerization
@@ -147,6 +161,8 @@ networth-tracker/
 │   ├── auth.py           # Authentication utilities
 │   ├── database.py       # JSON file database operations
 │   ├── stock_service.py  # Yahoo Finance stock price fetching
+│   ├── nav_service.py    # Mutual fund NAV fetching from mfapi.in
+│   ├── exchange_service.py # Live USD/INR exchange rate
 │   ├── config.py         # Configuration settings
 │   ├── requirements.txt  # Python dependencies
 │   └── Dockerfile        # Backend container config
@@ -167,6 +183,7 @@ networth-tracker/
 │   │   ├── api.js        # API client for all endpoints
 │   │   ├── AuthContext.jsx   # Auth state management
 │   │   ├── ThemeContext.jsx  # Dark mode state management
+│   │   ├── PrivacyContext.jsx # Privacy mode state management
 │   │   └── index.css     # Tailwind styles
 │   ├── package.json      # Node dependencies
 │   ├── vite.config.js    # Vite configuration
@@ -232,6 +249,9 @@ networth-tracker/
 | GET | `/api/mutual-funds/{id}` | Get mutual fund by ID |
 | PUT | `/api/mutual-funds/{id}` | Update mutual fund entry |
 | DELETE | `/api/mutual-funds/{id}` | Delete mutual fund entry |
+| POST | `/api/mutual-funds/{id}/refresh-nav` | Refresh NAV for specific fund |
+| GET | `/api/nav/search?q={query}` | Search mutual funds by name |
+| GET | `/api/nav/test` | Test NAV service connectivity |
 
 ### Equities (Stocks)
 | Method | Endpoint | Description |
@@ -252,6 +272,7 @@ networth-tracker/
 | POST | `/api/goal` | Create net worth goal |
 | PUT | `/api/goal` | Update net worth goal |
 | DELETE | `/api/goal` | Delete net worth goal |
+| GET | `/api/exchange-rate` | Get current USD to INR rate |
 
 ## Data Storage
 

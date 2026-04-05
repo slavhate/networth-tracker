@@ -12,7 +12,9 @@ import {
   LineChart,
   PieChart,
   Target,
-  Wallet
+  Wallet,
+  RefreshCw,
+  Info
 } from 'lucide-react';
 
 const FUND_CATEGORIES = [
@@ -45,6 +47,7 @@ export default function MutualFunds() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
   const [funds, setFunds] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingFund, setEditingFund] = useState(null);
   const [formData, setFormData] = useState({
@@ -54,28 +57,35 @@ export default function MutualFunds() {
     invested_amount: '',
     current_value: '',
     units: '',
-    nav: '',
+    avg_nav: '',
+    current_nav: '',
     folio_number: ''
   });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const fetchFunds = async () => {
+  const fetchFunds = async (refresh = false) => {
     try {
-      setLoading(true);
-      const response = await mutualFundsAPI.getAll();
+      if (refresh) setRefreshing(true);
+      else setLoading(true);
+      const response = await mutualFundsAPI.getAll(refresh);
       setFunds(response.data);
       updateLastUpdated();
     } catch (err) {
       setError('Failed to load mutual funds');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     fetchFunds();
   }, []);
+
+  const handleRefreshNav = () => {
+    fetchFunds(true);
+  };
 
   const openModal = (fund = null) => {
     if (fund) {
@@ -85,9 +95,10 @@ export default function MutualFunds() {
         amc: fund.amc,
         category: fund.category,
         invested_amount: fund.invested_amount.toString(),
-        current_value: fund.current_value.toString(),
+        current_value: fund.current_value?.toString() || '',
         units: fund.units?.toString() || '',
-        nav: fund.nav?.toString() || '',
+        avg_nav: fund.avg_nav?.toString() || '',
+        current_nav: fund.current_nav?.toString() || '',
         folio_number: fund.folio_number || ''
       });
     } else {
@@ -99,7 +110,8 @@ export default function MutualFunds() {
         invested_amount: '',
         current_value: '',
         units: '',
-        nav: '',
+        avg_nav: '',
+        current_nav: '',
         folio_number: ''
       });
     }
@@ -117,7 +129,8 @@ export default function MutualFunds() {
       invested_amount: '',
       current_value: '',
       units: '',
-      nav: '',
+      avg_nav: '',
+      current_nav: '',
       folio_number: ''
     });
   };
@@ -133,9 +146,10 @@ export default function MutualFunds() {
         amc: formData.amc,
         category: formData.category,
         invested_amount: parseFloat(formData.invested_amount),
-        current_value: parseFloat(formData.current_value),
+        current_value: formData.current_value ? parseFloat(formData.current_value) : null,
         units: formData.units ? parseFloat(formData.units) : 0,
-        nav: formData.nav ? parseFloat(formData.nav) : 0,
+        avg_nav: formData.avg_nav ? parseFloat(formData.avg_nav) : 0,
+        current_nav: formData.current_nav ? parseFloat(formData.current_nav) : null,
         folio_number: formData.folio_number || null
       };
 
@@ -171,7 +185,7 @@ export default function MutualFunds() {
   };
 
   const totalInvested = funds.reduce((sum, fund) => sum + fund.invested_amount, 0);
-  const totalCurrentValue = funds.reduce((sum, fund) => sum + fund.current_value, 0);
+  const totalCurrentValue = funds.reduce((sum, fund) => sum + (fund.current_value || 0), 0);
   const totalReturns = totalCurrentValue - totalInvested;
   const overallReturnPercent = totalInvested > 0 ? ((totalCurrentValue - totalInvested) / totalInvested) * 100 : 0;
 
@@ -191,10 +205,20 @@ export default function MutualFunds() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Mutual Funds</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Track your mutual fund investments</p>
         </div>
-        <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          Add Fund
-        </button>
+        <div className="flex gap-2">
+          <button 
+            onClick={handleRefreshNav} 
+            disabled={refreshing}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing...' : 'Refresh NAV'}
+          </button>
+          <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" />
+            Add Fund
+          </button>
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -264,9 +288,10 @@ export default function MutualFunds() {
           {funds.map((fund) => {
             const categoryInfo = getCategoryInfo(fund.category);
             const CategoryIcon = categoryInfo.icon;
-            const returnAmount = fund.current_value - fund.invested_amount;
+            const currentVal = fund.current_value || 0;
+            const returnAmount = currentVal - fund.invested_amount;
             const returnPercent = fund.invested_amount > 0 
-              ? ((fund.current_value - fund.invested_amount) / fund.invested_amount) * 100 
+              ? ((currentVal - fund.invested_amount) / fund.invested_amount) * 100 
               : 0;
             const isPositive = returnAmount >= 0;
             
@@ -293,20 +318,25 @@ export default function MutualFunds() {
                       <span className="text-gray-500 dark:text-gray-400">
                         Invested: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(fund.invested_amount)}</span>
                       </span>
-                      {fund.units && (
+                      {fund.units > 0 && (
                         <span className="text-gray-500 dark:text-gray-400">
                           Units: <span className="text-gray-900 dark:text-white font-medium">{fund.units.toFixed(3)}</span>
                         </span>
                       )}
-                      {fund.nav && (
+                      {fund.avg_nav > 0 && (
                         <span className="text-gray-500 dark:text-gray-400">
-                          NAV: <span className="text-gray-900 dark:text-white font-medium">₹{fund.nav.toFixed(2)}</span>
+                          Avg NAV: <span className="text-gray-900 dark:text-white font-medium">₹{fund.avg_nav.toFixed(2)}</span>
+                        </span>
+                      )}
+                      {fund.current_nav > 0 && (
+                        <span className="text-gray-500 dark:text-gray-400">
+                          Current NAV: <span className="text-green-600 dark:text-green-400 font-medium">₹{fund.current_nav.toFixed(2)}</span>
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(fund.current_value)}</p>
+                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(currentVal)}</p>
                     <p className={`text-sm font-medium flex items-center justify-end gap-1 ${isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                       {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
                       {formatCurrency(Math.abs(returnAmount))} ({formatPercent(returnPercent)})
@@ -358,11 +388,15 @@ export default function MutualFunds() {
                 <input
                   type="text"
                   className="input"
-                  placeholder="e.g., SBI Bluechip Fund"
+                  placeholder="e.g., HDFC Flexi Cap Fund Direct Plan Growth"
                   value={formData.fund_name}
                   onChange={(e) => setFormData({ ...formData, fund_name: e.target.value })}
                   required
                 />
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                  <Info className="w-3 h-3" />
+                  Enter exact fund name (with Direct/Regular & Growth/Dividend) for accurate NAV fetching
+                </p>
               </div>
 
               <div>
@@ -407,23 +441,22 @@ export default function MutualFunds() {
                   />
                 </div>
                 <div>
-                  <label className="label">Current Value (₹)</label>
+                  <label className="label">Current Value (₹) <span className="text-gray-400 font-normal">- Optional</span></label>
                   <input
                     type="number"
                     className="input"
-                    placeholder="0"
+                    placeholder="Auto-calculated from Units × Current NAV"
                     min="0"
                     step="1"
                     value={formData.current_value}
                     onChange={(e) => setFormData({ ...formData, current_value: e.target.value })}
-                    required
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="label">Units (Optional)</label>
+                  <label className="label">Units</label>
                   <input
                     type="number"
                     className="input"
@@ -435,17 +468,30 @@ export default function MutualFunds() {
                   />
                 </div>
                 <div>
-                  <label className="label">NAV (Optional)</label>
+                  <label className="label">Avg. NAV (Purchase NAV)</label>
                   <input
                     type="number"
                     className="input"
                     placeholder="0.00"
                     min="0"
                     step="0.01"
-                    value={formData.nav}
-                    onChange={(e) => setFormData({ ...formData, nav: e.target.value })}
+                    value={formData.avg_nav}
+                    onChange={(e) => setFormData({ ...formData, avg_nav: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="label">Current NAV <span className="text-gray-400 font-normal">- Optional (auto-fetched)</span></label>
+                <input
+                  type="number"
+                  className="input"
+                  placeholder="Leave empty to fetch from internet"
+                  min="0"
+                  step="0.01"
+                  value={formData.current_nav}
+                  onChange={(e) => setFormData({ ...formData, current_nav: e.target.value })}
+                />
               </div>
 
               <div>

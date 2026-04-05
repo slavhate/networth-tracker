@@ -84,12 +84,14 @@ export const insurancesAPI = {
 
 // Mutual Funds API
 export const mutualFundsAPI = {
-  getAll: () => api.get('/api/mutual-funds'),
+  getAll: (refreshNav = false) => api.get(`/api/mutual-funds?refresh_nav=${refreshNav}`),
   get: (id) => api.get(`/api/mutual-funds/${id}`),
   create: (data) => api.post('/api/mutual-funds', data),
   update: (id, data) => api.put(`/api/mutual-funds/${id}`, data),
   delete: (id) => api.delete(`/api/mutual-funds/${id}`),
   getSummary: () => api.get('/api/mutual-funds-summary'),
+  refreshNav: (id) => api.post(`/api/mutual-funds/${id}/refresh-nav`),
+  searchNav: (query) => api.get(`/api/nav/search?q=${encodeURIComponent(query)}`),
 };
 
 // Equities API

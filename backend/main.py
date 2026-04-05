@@ -23,6 +23,7 @@ from auth import (
 import database as db
 import stock_service
 import exchange_service
+import nav_service
 
 app = FastAPI(
     title="Net Worth Tracker API",
@@ -340,15 +341,62 @@ async def get_insurances_summary(user_id: str = Depends(get_user_id)):
 
 # ============== Mutual Fund Routes ==============
 
+async def _process_mutual_fund_data(fund_dict: dict) -> dict:
+    """Process mutual fund data: fetch NAV if needed and calculate current_value"""
+    # Try to fetch current NAV if not provided
+    if not fund_dict.get("current_nav") and fund_dict.get("fund_name"):
+        nav_info = await nav_service.fetch_nav_by_fund_name(fund_dict["fund_name"])
+        if nav_info:
+            fund_dict["current_nav"] = nav_info["nav"]
+            if not fund_dict.get("scheme_code"):
+                fund_dict["scheme_code"] = nav_info.get("scheme_code")
+    
+    # Calculate current_value if not provided
+    units = fund_dict.get("units", 0)
+    current_nav = fund_dict.get("current_nav")
+    avg_nav = fund_dict.get("avg_nav", 0)
+    
+    if not fund_dict.get("current_value") or fund_dict.get("current_value") == 0:
+        if current_nav and units:
+            fund_dict["current_value"] = round(units * current_nav, 2)
+        elif avg_nav and units:
+            # Fallback to avg_nav if current_nav not available
+            fund_dict["current_value"] = round(units * avg_nav, 2)
+        else:
+            # Default to invested_amount if no NAV data
+            fund_dict["current_value"] = fund_dict.get("invested_amount", 0)
+    
+    return fund_dict
+
 @app.get("/api/mutual-funds", response_model=List[MutualFund])
-async def get_mutual_funds(user_id: str = Depends(get_user_id)):
-    """Get all mutual funds for current user"""
-    return db.get_mutual_funds_by_user(user_id)
+async def get_mutual_funds(user_id: str = Depends(get_user_id), refresh_nav: bool = False):
+    """Get all mutual funds for current user. Set refresh_nav=true to fetch latest NAV."""
+    funds = db.get_mutual_funds_by_user(user_id)
+    
+    if refresh_nav and funds:
+        for fund in funds:
+            nav_info = await nav_service.fetch_nav_by_fund_name(fund["fund_name"])
+            if nav_info:
+                units = fund.get("units", 0)
+                fund["current_nav"] = nav_info["nav"]
+                fund["scheme_code"] = nav_info.get("scheme_code")
+                if units > 0:
+                    fund["current_value"] = round(units * nav_info["nav"], 2)
+                # Update in database
+                db.update_mutual_fund(fund["id"], fund["user_id"], {
+                    "current_nav": fund["current_nav"],
+                    "current_value": fund["current_value"],
+                    "scheme_code": fund.get("scheme_code")
+                })
+    
+    return funds
 
 @app.post("/api/mutual-funds", response_model=MutualFund, status_code=status.HTTP_201_CREATED)
 async def create_mutual_fund(fund_data: MutualFundCreate, user_id: str = Depends(get_user_id)):
     """Create a new mutual fund"""
-    fund = db.create_mutual_fund(user_id, fund_data.model_dump())
+    fund_dict = fund_data.model_dump()
+    fund_dict = await _process_mutual_fund_data(fund_dict)
+    fund = db.create_mutual_fund(user_id, fund_dict)
     return fund
 
 @app.get("/api/mutual-funds/{fund_id}", response_model=MutualFund)
@@ -362,7 +410,15 @@ async def get_mutual_fund(fund_id: str, user_id: str = Depends(get_user_id)):
 @app.put("/api/mutual-funds/{fund_id}", response_model=MutualFund)
 async def update_mutual_fund(fund_id: str, update_data: MutualFundUpdate, user_id: str = Depends(get_user_id)):
     """Update a mutual fund"""
-    fund = db.update_mutual_fund(fund_id, user_id, update_data.model_dump(exclude_unset=True))
+    update_dict = update_data.model_dump(exclude_unset=True)
+    
+    # If fund_name is being updated or current_nav is not set, try to fetch NAV
+    existing_fund = db.get_mutual_fund_by_id(fund_id, user_id)
+    if existing_fund:
+        merged = {**existing_fund, **update_dict}
+        update_dict = await _process_mutual_fund_data(merged)
+    
+    fund = db.update_mutual_fund(fund_id, user_id, update_dict)
     if not fund:
         raise HTTPException(status_code=404, detail="Mutual fund not found")
     return fund
@@ -378,7 +434,7 @@ async def get_mutual_funds_summary(user_id: str = Depends(get_user_id)):
     """Get mutual fund summary"""
     funds = db.get_mutual_funds_by_user(user_id)
     total_invested = sum(f["invested_amount"] for f in funds)
-    total_current = sum(f["current_value"] for f in funds)
+    total_current = sum(f.get("current_value") or 0 for f in funds)
     total_gain = total_current - total_invested
     return {
         "total_invested": total_invested, 
@@ -386,6 +442,37 @@ async def get_mutual_funds_summary(user_id: str = Depends(get_user_id)):
         "total_gain": total_gain,
         "fund_count": len(funds)
     }
+
+@app.post("/api/mutual-funds/{fund_id}/refresh-nav")
+async def refresh_fund_nav(fund_id: str, user_id: str = Depends(get_user_id)):
+    """Refresh NAV for a specific mutual fund"""
+    fund = db.get_mutual_fund_by_id(fund_id, user_id)
+    if not fund:
+        raise HTTPException(status_code=404, detail="Mutual fund not found")
+    
+    nav_info = await nav_service.fetch_nav_by_fund_name(fund["fund_name"])
+    if nav_info:
+        units = fund.get("units", 0)
+        update_data = {
+            "current_nav": nav_info["nav"],
+            "scheme_code": nav_info.get("scheme_code"),
+            "current_value": round(units * nav_info["nav"], 2) if units > 0 else fund.get("current_value", 0)
+        }
+        updated_fund = db.update_mutual_fund(fund_id, user_id, update_data)
+        return {"status": "success", "nav": nav_info["nav"], "date": nav_info["date"], "fund": updated_fund}
+    
+    return {"status": "error", "message": "Could not fetch NAV for this fund"}
+
+@app.get("/api/nav/search")
+async def search_nav(q: str):
+    """Search for mutual funds by name to get scheme codes"""
+    results = await nav_service.search_mutual_fund(q)
+    return results
+
+@app.get("/api/nav/test")
+async def test_nav_service():
+    """Test if NAV service is working"""
+    return await nav_service.test_nav_service()
 
 # ============== Equity Routes ==============
 

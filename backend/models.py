@@ -199,10 +199,12 @@ class MutualFundBase(BaseModel):
     category: MutualFundCategory
     folio_number: Optional[str] = None
     units: float = Field(default=0, ge=0)
-    nav: float = Field(default=0, ge=0)  # Net Asset Value
+    avg_nav: float = Field(default=0, ge=0)  # Average Net Asset Value (purchase NAV)
+    current_nav: Optional[float] = None  # Current NAV (fetched from API)
     invested_amount: float = Field(..., ge=0)
-    current_value: float = Field(..., ge=0)
+    current_value: Optional[float] = None  # Optional - calculated from units * current_nav
     sip_amount: Optional[float] = None  # SIP amount if applicable
+    scheme_code: Optional[str] = None  # AMFI scheme code for NAV fetching
 
 class MutualFund(MutualFundBase):
     id: str
@@ -219,10 +221,12 @@ class MutualFundUpdate(BaseModel):
     category: Optional[MutualFundCategory] = None
     folio_number: Optional[str] = None
     units: Optional[float] = None
-    nav: Optional[float] = None
+    avg_nav: Optional[float] = None
+    current_nav: Optional[float] = None
     invested_amount: Optional[float] = None
     current_value: Optional[float] = None
     sip_amount: Optional[float] = None
+    scheme_code: Optional[str] = None
 
 # Equity/Stock Models
 class StockMarket(str, Enum):
