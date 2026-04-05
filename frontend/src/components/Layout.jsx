@@ -2,6 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../ThemeContext';
 import { usePrivacy } from '../PrivacyContext';
+import { exportAPI } from '../api';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -17,7 +18,9 @@ import {
   BarChart3,
   Eye,
   EyeOff,
-  Clock
+  Clock,
+  Download,
+  User
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -39,10 +42,31 @@ export default function Layout() {
   const { privacyMode, togglePrivacyMode, lastUpdated } = usePrivacy();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      const response = await exportAPI.download();
+      const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `networth_backup_${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const navItems = [
@@ -151,36 +175,47 @@ export default function Layout() {
             ))}
           </nav>
 
-          {/* Last Updated & User Section */}
-          <div className="p-4 border-t border-gray-100 dark:border-gray-700">
+          {/* User Section */}
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
             {/* Last Updated */}
-            <div className="flex items-center gap-2 px-4 py-2 mb-2 text-xs text-gray-500 dark:text-gray-400">
-              <Clock className="w-3.5 h-3.5" />
-              <div>
-                <span className="font-medium">Last updated:</span>
-                <br />
-                <span>{formatLastUpdated(lastUpdated)}</span>
+            <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+              <Clock className="w-4 h-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
+              <div className="text-xs text-gray-500 dark:text-gray-400 min-w-0">
+                <span className="font-medium">Last updated</span>
+                <p className="truncate">{formatLastUpdated(lastUpdated)}</p>
               </div>
             </div>
-            
-            <div className="flex items-center gap-3 px-4 py-3">
-              <div className="w-10 h-10 bg-gray-200 dark:bg-gray-600 rounded-full flex items-center justify-center">
-                <span className="font-medium text-gray-600 dark:text-gray-200">
-                  {user?.username?.charAt(0).toUpperCase()}
-                </span>
+
+            {/* User Info */}
+            <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+              <div className="w-9 h-9 bg-primary-100 dark:bg-primary-900/50 rounded-full flex items-center justify-center flex-shrink-0">
+                <User className="w-4 h-4 text-primary-600 dark:text-primary-400" />
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 dark:text-white truncate">{user?.username}</p>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-sm text-gray-900 dark:text-white truncate">{user?.username}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
               </div>
             </div>
-            <button
-              onClick={handleLogout}
-              className="w-full mt-2 flex items-center gap-3 px-4 py-3 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white transition-colors duration-150"
-            >
-              <LogOut className="w-5 h-5" />
-              <span className="font-medium">Logout</span>
-            </button>
+
+            {/* Action Buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 transition-colors duration-150 disabled:opacity-50"
+                title="Export data for backup"
+              >
+                <Download className={`w-4 h-4 ${exporting ? 'animate-bounce' : ''}`} />
+                <span>{exporting ? 'Exporting...' : 'Backup'}</span>
+              </button>
+              <button
+                onClick={handleLogout}
+                className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 border border-red-200 dark:border-red-800 transition-colors duration-150"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Logout</span>
+              </button>
+            </div>
           </div>
         </div>
       </aside>

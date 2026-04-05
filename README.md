@@ -21,6 +21,7 @@ A professional, full-featured web application for tracking personal net worth wi
 - **User Authentication** - Secure JWT-based authentication with registration and login
 - **Dark Mode** - Toggle between light and dark themes
 - **Privacy Mode** - Mask all financial numbers with one click (default ON for security)
+- **Data Export/Backup** - Download all your financial data as JSON for backup purposes
 - **Last Updated Timestamp** - Shows when data was last refreshed in the sidebar
 - **Responsive Design** - Works beautifully on desktop and mobile
 - **Containerized** - Easy deployment with Docker
@@ -274,6 +275,7 @@ networth-tracker/
 | PUT | `/api/goal` | Update net worth goal |
 | DELETE | `/api/goal` | Delete net worth goal |
 | GET | `/api/exchange-rate` | Get current USD to INR rate |
+| GET | `/api/export` | Export all user data as JSON backup |
 
 ## Data Storage
 

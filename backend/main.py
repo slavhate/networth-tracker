@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 from datetime import timedelta
 from typing import List
 
@@ -176,6 +177,32 @@ async def get_exchange_rate():
     """Get current USD to INR exchange rate"""
     rate = await exchange_service.fetch_usd_to_inr()
     return {"usd_to_inr": rate}
+
+@app.get("/api/export")
+async def export_user_data(user_id: str = Depends(get_user_id)):
+    """Export all user data as JSON for backup"""
+    from datetime import datetime
+    
+    # Gather all user data
+    export_data = {
+        "export_date": datetime.now().isoformat(),
+        "user_id": user_id,
+        "assets": db.get_assets_by_user(user_id),
+        "liabilities": db.get_liabilities_by_user(user_id),
+        "bank_accounts": db.get_bank_accounts_by_user(user_id),
+        "insurances": db.get_insurances_by_user(user_id),
+        "mutual_funds": db.get_mutual_funds_by_user(user_id),
+        "equities": db.get_equities_by_user(user_id),
+        "snapshots": db.get_snapshots_by_user(user_id),
+        "goal": db.get_goal_by_user(user_id)
+    }
+    
+    return JSONResponse(
+        content=export_data,
+        headers={
+            "Content-Disposition": f"attachment; filename=networth_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        }
+    )
 
 @app.get("/api/dashboard", response_model=DashboardMetrics)
 async def get_dashboard(user_id: str = Depends(get_user_id)):

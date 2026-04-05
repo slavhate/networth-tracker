@@ -125,4 +125,9 @@ export const goalAPI = {
   delete: () => api.delete('/api/goal'),
 };
 
+// Export API
+export const exportAPI = {
+  download: () => api.get('/api/export'),
+};
+
 export default api;
