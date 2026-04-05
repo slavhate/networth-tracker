@@ -57,7 +57,6 @@ export default function MutualFunds() {
     invested_amount: '',
     current_value: '',
     units: '',
-    avg_nav: '',
     current_nav: '',
     folio_number: ''
   });
@@ -97,7 +96,6 @@ export default function MutualFunds() {
         invested_amount: fund.invested_amount.toString(),
         current_value: fund.current_value?.toString() || '',
         units: fund.units?.toString() || '',
-        avg_nav: fund.avg_nav?.toString() || '',
         current_nav: fund.current_nav?.toString() || '',
         folio_number: fund.folio_number || ''
       });
@@ -110,7 +108,6 @@ export default function MutualFunds() {
         invested_amount: '',
         current_value: '',
         units: '',
-        avg_nav: '',
         current_nav: '',
         folio_number: ''
       });
@@ -129,7 +126,6 @@ export default function MutualFunds() {
       invested_amount: '',
       current_value: '',
       units: '',
-      avg_nav: '',
       current_nav: '',
       folio_number: ''
     });
@@ -148,7 +144,6 @@ export default function MutualFunds() {
         invested_amount: parseFloat(formData.invested_amount),
         current_value: formData.current_value ? parseFloat(formData.current_value) : null,
         units: formData.units ? parseFloat(formData.units) : 0,
-        avg_nav: formData.avg_nav ? parseFloat(formData.avg_nav) : 0,
         current_nav: formData.current_nav ? parseFloat(formData.current_nav) : null,
         folio_number: formData.folio_number || null
       };
@@ -454,31 +449,20 @@ export default function MutualFunds() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label">Units</label>
-                  <input
-                    type="number"
-                    className="input"
-                    placeholder="0.000"
-                    min="0"
-                    step="0.001"
-                    value={formData.units}
-                    onChange={(e) => setFormData({ ...formData, units: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="label">Avg. NAV (Purchase NAV)</label>
-                  <input
-                    type="number"
-                    className="input"
-                    placeholder="0.00"
-                    min="0"
-                    step="0.01"
-                    value={formData.avg_nav}
-                    onChange={(e) => setFormData({ ...formData, avg_nav: e.target.value })}
-                  />
-                </div>
+              <div>
+                <label className="label">Units</label>
+                <input
+                  type="number"
+                  className="input"
+                  placeholder="0.000"
+                  min="0"
+                  step="0.001"
+                  value={formData.units}
+                  onChange={(e) => setFormData({ ...formData, units: e.target.value })}
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Avg NAV will be auto-calculated: Invested Amount ÷ Units
+                </p>
               </div>
 
               <div>

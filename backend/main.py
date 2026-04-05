@@ -342,7 +342,7 @@ async def get_insurances_summary(user_id: str = Depends(get_user_id)):
 # ============== Mutual Fund Routes ==============
 
 async def _process_mutual_fund_data(fund_dict: dict) -> dict:
-    """Process mutual fund data: fetch NAV if needed and calculate current_value"""
+    """Process mutual fund data: fetch NAV if needed, calculate avg_nav and current_value"""
     # Try to fetch current NAV if not provided
     if not fund_dict.get("current_nav") and fund_dict.get("fund_name"):
         nav_info = await nav_service.fetch_nav_by_fund_name(fund_dict["fund_name"])
@@ -351,8 +351,15 @@ async def _process_mutual_fund_data(fund_dict: dict) -> dict:
             if not fund_dict.get("scheme_code"):
                 fund_dict["scheme_code"] = nav_info.get("scheme_code")
     
-    # Calculate current_value if not provided
+    # Calculate avg_nav = invested_amount / units
     units = fund_dict.get("units", 0)
+    invested_amount = fund_dict.get("invested_amount", 0)
+    if units > 0 and invested_amount > 0:
+        fund_dict["avg_nav"] = round(invested_amount / units, 4)
+    else:
+        fund_dict["avg_nav"] = 0
+    
+    # Calculate current_value if not provided
     current_nav = fund_dict.get("current_nav")
     avg_nav = fund_dict.get("avg_nav", 0)
     

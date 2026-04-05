@@ -34,7 +34,8 @@ A professional, full-featured web application for tracking personal net worth wi
 - **Insurances** - Manage life, health, term, vehicle, and property insurance policies with premium tracking (monthly/yearly frequency support)
 - **Mutual Funds** - Track mutual fund investments with:
   - **Auto NAV Fetching** from mfapi.in (free API, no rate limits)
-  - Avg NAV (purchase price) and Current NAV tracking
+  - **Auto-calculated Avg NAV** (Invested Amount ÷ Units)
+  - Current NAV tracking (fetched from internet)
   - Auto-calculation of current value from units × current NAV
   - "Refresh NAV" button to update all fund values
 - **Equities** - Stock portfolio management with:
