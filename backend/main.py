@@ -211,6 +211,8 @@ async def get_dashboard(user_id: str = Depends(get_user_id)):
     liabilities = db.get_liabilities_by_user(user_id)
     snapshots = db.get_snapshots_by_user(user_id)
     equities = db.get_equities_by_user(user_id)
+    bank_accounts = db.get_bank_accounts_by_user(user_id)
+    mutual_funds = db.get_mutual_funds_by_user(user_id)
     
     # Get live USD to INR rate
     usd_to_inr = await exchange_service.fetch_usd_to_inr()
@@ -221,14 +223,19 @@ async def get_dashboard(user_id: str = Depends(get_user_id)):
         e["current_value"] * usd_to_inr if e.get("market") == "NASDAQ" else e["current_value"] 
         for e in equities
     )
-    total_assets_with_equities = total_assets + total_equities
+    # Add bank account balances
+    total_bank_accounts = sum(b["balance"] for b in bank_accounts)
+    # Add mutual fund current values
+    total_mutual_funds = sum(m.get("current_value", 0) or 0 for m in mutual_funds)
+    
+    total_assets_combined = total_assets + total_equities + total_bank_accounts + total_mutual_funds
     total_liabilities = sum(l["amount"] for l in liabilities)
-    net_worth = total_assets_with_equities - total_liabilities
+    net_worth = total_assets_combined - total_liabilities
     
     # Calculate debt-to-asset ratio
-    debt_to_asset_ratio = (total_liabilities / total_assets_with_equities * 100) if total_assets_with_equities > 0 else 0
+    debt_to_asset_ratio = (total_liabilities / total_assets_combined * 100) if total_assets_combined > 0 else 0
     
-    # Group assets by category (include equities as a category)
+    # Group assets by category (include equities, bank accounts, mutual funds as categories)
     assets_by_category = {}
     for asset in assets:
         category = asset["category"]
@@ -240,6 +247,14 @@ async def get_dashboard(user_id: str = Depends(get_user_id)):
     if total_equities > 0:
         assets_by_category["equities"] = total_equities
     
+    # Add bank accounts as a category if there are any
+    if total_bank_accounts > 0:
+        assets_by_category["bank_accounts"] = total_bank_accounts
+    
+    # Add mutual funds as a category if there are any
+    if total_mutual_funds > 0:
+        assets_by_category["mutual_funds"] = total_mutual_funds
+    
     # Group liabilities by category
     liabilities_by_category = {}
     for liability in liabilities:
@@ -249,14 +264,14 @@ async def get_dashboard(user_id: str = Depends(get_user_id)):
         liabilities_by_category[category] += liability["amount"]
     
     return DashboardMetrics(
-        total_assets=total_assets_with_equities,
+        total_assets=total_assets_combined,
         total_liabilities=total_liabilities,
         net_worth=net_worth,
         debt_to_asset_ratio=round(debt_to_asset_ratio, 2),
         assets_by_category=assets_by_category,
         liabilities_by_category=liabilities_by_category,
         net_worth_history=snapshots,
-        asset_count=len(assets) + len(equities),
+        asset_count=len(assets) + len(equities) + len(bank_accounts) + len(mutual_funds),
         liability_count=len(liabilities)
     )
 
@@ -266,6 +281,8 @@ async def create_snapshot(user_id: str = Depends(get_user_id)):
     assets = db.get_assets_by_user(user_id)
     liabilities = db.get_liabilities_by_user(user_id)
     equities = db.get_equities_by_user(user_id)
+    bank_accounts = db.get_bank_accounts_by_user(user_id)
+    mutual_funds = db.get_mutual_funds_by_user(user_id)
     
     # Get live USD to INR rate
     usd_to_inr = await exchange_service.fetch_usd_to_inr()
@@ -275,7 +292,10 @@ async def create_snapshot(user_id: str = Depends(get_user_id)):
         e["current_value"] * usd_to_inr if e.get("market") == "NASDAQ" else e["current_value"] 
         for e in equities
     )
-    total_assets = sum(a["value"] for a in assets) + total_equities
+    total_bank_accounts = sum(b["balance"] for b in bank_accounts)
+    total_mutual_funds = sum(m.get("current_value", 0) or 0 for m in mutual_funds)
+    
+    total_assets = sum(a["value"] for a in assets) + total_equities + total_bank_accounts + total_mutual_funds
     total_liabilities = sum(l["amount"] for l in liabilities)
     
     snapshot = db.create_snapshot(user_id, total_assets, total_liabilities)

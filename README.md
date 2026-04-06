@@ -63,6 +63,25 @@ A professional, full-featured web application for tracking personal net worth wi
 - **USD Support** - For NASDAQ-listed stocks
 - **Live Exchange Rate** - USD to INR conversion fetched from free APIs (exchangerate-api.com, frankfurter.app) with 1-hour caching
 
+## How Net Worth is Calculated
+
+Your **Net Worth** is the total value of everything you own minus everything you owe. Here's what gets counted:
+
+### What's Added (Your Assets)
+- **Assets** - Cash, real estate, vehicles, retirement accounts, crypto, and other valuables you've added
+- **Bank Accounts** - The total balance across all your savings, current, salary, and fixed deposit accounts
+- **Mutual Funds** - The current value of all your mutual fund investments (units × current NAV)
+- **Equities (Stocks)** - The current market value of your stock portfolio. For US stocks (NASDAQ), the value is automatically converted from USD to INR using live exchange rates
+
+### What's Subtracted (Your Debts)
+- **Liabilities** - All your debts including home loans, car loans, personal loans, credit card balances, and any other money you owe
+
+### The Formula
+**Net Worth = (Assets + Bank Accounts + Mutual Funds + Stocks) - Liabilities**
+
+### What's NOT Included
+- **Insurance Policies** - These are tracked separately for reference but don't count toward net worth since they represent future coverage, not current value
+
 ## Tech Stack
 
 ### Backend
