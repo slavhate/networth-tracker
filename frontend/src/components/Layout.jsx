@@ -3,11 +3,12 @@ import { useAuth } from '../AuthContext';
 import { useTheme } from '../ThemeContext';
 import { usePrivacy } from '../PrivacyContext';
 import { exportAPI } from '../api';
-import { 
-  LayoutDashboard, 
-  Wallet, 
-  CreditCard, 
-  LogOut, 
+import { generateReport } from '../utils/reportGenerator';
+import {
+  LayoutDashboard,
+  Wallet,
+  CreditCard,
+  LogOut,
   Menu,
   X,
   Sun,
@@ -23,7 +24,8 @@ import {
   Upload,
   User,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
+  Printer
 } from 'lucide-react';
 import { useState, useRef } from 'react';
 
@@ -49,6 +51,8 @@ export default function Layout() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
+  const [reporting, setReporting] = useState(false);
+  const [printError, setPrintError] = useState(null);
 
   const handleLogout = () => {
     logout();
@@ -72,6 +76,29 @@ export default function Layout() {
       console.error('Export failed:', err);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handlePrintReport = async () => {
+    try {
+      setReporting(true);
+      setPrintError(null);
+      const html = await generateReport(privacyMode);
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `networth-report-${new Date().toISOString().slice(0, 10)}.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Print report failed:', err);
+      setPrintError('Report generation failed. Please try again.');
+      setTimeout(() => setPrintError(null), 4000);
+    } finally {
+      setReporting(false);
     }
   };
 
@@ -285,7 +312,26 @@ export default function Layout() {
                   <span>{importing ? 'Restoring...' : 'Restore'}</span>
                 </button>
               </div>
-              
+
+              {/* Print Error Message */}
+              {printError && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="truncate">{printError}</span>
+                </div>
+              )}
+
+              {/* Print Report */}
+              <button
+                onClick={handlePrintReport}
+                disabled={reporting}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-xs font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-800 transition-colors duration-150 disabled:opacity-50"
+                title="Download print-friendly HTML report"
+              >
+                <Printer className={`w-3.5 h-3.5 ${reporting ? 'animate-pulse' : ''}`} />
+                <span>{reporting ? 'Generating...' : 'Print Report'}</span>
+              </button>
+
               {/* Logout */}
               <button
                 onClick={handleLogout}
