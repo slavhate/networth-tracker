@@ -112,7 +112,7 @@ Your **Net Worth** is the total value of everything you own minus everything you
 
 ## Docker Hub
 
-Pre-built images are available on Docker Hub: [`shri32msi/network-tracker`](https://hub.docker.com/r/shri32msi/network-tracker)
+Pre-built images are available on Docker Hub: [`shri32msi/networth-tracker`](https://hub.docker.com/r/shri32msi/networth-tracker)
 
 | Tag | Description |
 |-----|-------------|
@@ -136,14 +136,14 @@ docker run -d \
   -v ./data:/app/data \
   -e CREATE_DEMO_DATA=true \
   -e DATA_FILE=/app/data/data.json \
-  shri32msi/network-tracker:backend
+  shri32msi/networth-tracker:backend
 
 # 4. Start the frontend
 docker run -d \
   --name networth-frontend \
   --network networth-network \
   -p 3000:3000 \
-  shri32msi/network-tracker:frontend
+  shri32msi/networth-tracker:frontend
 ```
 
 Open http://localhost:3000 and login with **demo** / **password123**.
@@ -161,7 +161,7 @@ docker network rm networth-network
 # docker-compose.yml
 services:
   backend:
-    image: shri32msi/network-tracker:backend
+    image: shri32msi/networth-tracker:backend
     container_name: networth-backend
     ports:
       - "8000:8000"
@@ -175,7 +175,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: shri32msi/network-tracker:frontend
+    image: shri32msi/networth-tracker:frontend
     container_name: networth-frontend
     ports:
       - "3000:3000"
