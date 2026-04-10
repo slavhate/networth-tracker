@@ -5,6 +5,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ![Net Worth Tracker](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Vibe Coded](https://img.shields.io/badge/vibe%20coded-with%20Claude-blueviolet.svg)
+[![Docker Hub](https://img.shields.io/docker/pulls/shri32msi/networth-tracker?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/shri32msi/networth-tracker)
 
 ![Net Worth Dashboard](/images/dashboard.png)
 
