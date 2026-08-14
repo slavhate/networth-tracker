@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     DATA_FILE: str = os.path.join(os.path.dirname(__file__), "..", "data", "data.json")
     CREATE_DEMO_DATA: bool = False
+    STORAGE_BACKEND: str = "local"  # "local" (Docker Compose) or "s3" (Lambda)
+    DATA_BUCKET: str = ""  # required when STORAGE_BACKEND=s3
 
     class Config:
         env_file = ".env"
