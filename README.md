@@ -454,6 +454,49 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
 
 4. **Configure reverse proxy** (nginx/traefik) for HTTPS
 
+## AWS Serverless Deployment (Optional)
+
+In addition to Docker Compose (for local use), this app can be deployed to
+AWS as a serverless stack: Lambda (FastAPI via Mangum) behind a CloudFront
+distribution with Origin Access Control, static frontend on S3, data
+persisted as one JSON object per user on S3, a custom domain with a free
+ACM certificate, a $5/month AWS Budget alert, and Lambda reserved
+concurrency capped at 2. No WAF - the IAM-authenticated Function URL
+combined with CloudFront OAC already rejects unauthenticated traffic before
+any cost is incurred. See
+[`docs/superpowers/specs/2026-08-14-lambda-s3-cloudfront-migration-design.md`](docs/superpowers/specs/2026-08-14-lambda-s3-cloudfront-migration-design.md)
+for the full design.
+
+### Prerequisites
+
+- An AWS account with credentials configured (`aws configure` or SSO login)
+- A Route 53 hosted zone for your domain's parent zone
+- Docker (used to build a Lambda-compatible deployment package)
+- Node.js/npm (used to build the frontend)
+
+### Deploy
+
+```bash
+export HOSTED_ZONE_ID=Z0123456789ABCDEFGHI   # aws route53 list-hosted-zones-by-name --dns-name yourdomain.in
+export NOTIFICATION_EMAIL=you@example.com
+export SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+
+./infra/deploy.sh
+```
+
+Re-run `./infra/deploy.sh` any time you change backend or frontend code —
+it rebuilds and redeploys both. Keep `SECRET_KEY` the same across
+redeploys, or every existing login session is invalidated.
+
+### Cost controls in this deployment
+
+| Control | Setting |
+|---|---|
+| Lambda reserved concurrency | 2 |
+| CloudFront price class | PriceClass_100 (US/Canada/Europe edges) |
+| AWS Budget alert | $5/month, email at 80% and 100% |
+| WAF | Not deployed (intentional - see design spec) |
+
 ## License
 
 MIT License - feel free to use this project for personal or commercial purposes.
