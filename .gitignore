@@ -37,3 +37,6 @@ data/*.json
 
 # Worktrees
 .worktrees/
+
+# Infra build artifacts
+infra/*.zip
