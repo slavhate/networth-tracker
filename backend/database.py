@@ -94,7 +94,11 @@ def get_user_by_username(username: str) -> Optional[Dict]:
 def create_user(username: str, email: str, hashed_password: str) -> Dict:
     if settings.STORAGE_BACKEND == "s3":
         user_id = generate_id()
-        if not s3_storage.register_username(username, user_id):
+        try:
+            registered = s3_storage.register_username(username, user_id)
+        except s3_storage.ConflictError as e:
+            raise ConcurrentWriteError(str(e)) from e
+        if not registered:
             raise ValueError(f"Username '{username}' already registered")
         user = {
             "id": user_id,
@@ -108,7 +112,10 @@ def create_user(username: str, email: str, hashed_password: str) -> Dict:
             "assets": [], "liabilities": [], "snapshots": [], "bank_accounts": [],
             "insurances": [], "mutual_funds": [], "equities": [], "goals": []
         }
-        s3_storage.save_user_data(user_id, blob)
+        try:
+            s3_storage.save_user_data(user_id, blob)
+        except s3_storage.ConflictError as e:
+            raise ConcurrentWriteError(str(e)) from e
         return user
 
     data = _load_local_data()
