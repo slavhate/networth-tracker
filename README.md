@@ -484,6 +484,11 @@ export SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 ./infra/deploy.sh
 ```
 
+Optional overrides (sensible defaults if unset): `AWS_REGION` (default
+`us-east-1`), `DOMAIN_NAME` (default `nwt.shrikantlavhate.in`),
+`RESERVED_CONCURRENCY` (default `2`), `STACK_NAME` (default
+`networth-tracker`).
+
 Re-run `./infra/deploy.sh` any time you change backend or frontend code —
 it rebuilds and redeploys both. Keep `SECRET_KEY` the same across
 redeploys, or every existing login session is invalidated.
