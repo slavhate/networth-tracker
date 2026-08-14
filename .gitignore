@@ -34,3 +34,6 @@ data/*.json
 
 # Docker
 .docker/
+
+# Worktrees
+.worktrees/
