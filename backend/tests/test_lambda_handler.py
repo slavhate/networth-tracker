@@ -1,10 +1,13 @@
-def _function_url_event(method: str, path: str, query: str = ""):
-    return {
+import json as jsonlib
+
+
+def _function_url_event(method: str, path: str, query: str = "", headers=None, body=None):
+    event = {
         "version": "2.0",
         "routeKey": "$default",
         "rawPath": path,
         "rawQueryString": query,
-        "headers": {"host": "example.com"},
+        "headers": headers or {"host": "example.com"},
         "requestContext": {
             "http": {
                 "method": method,
@@ -22,6 +25,9 @@ def _function_url_event(method: str, path: str, query: str = ""):
         },
         "isBase64Encoded": False,
     }
+    if body is not None:
+        event["body"] = body
+    return event
 
 
 class FakeContext:
@@ -38,3 +44,38 @@ def test_health_check_via_lambda_handler():
 
     assert result["statusCode"] == 200
     assert "healthy" in result["body"]
+
+
+def test_register_login_and_authenticated_request_via_lambda_handler(monkeypatch, tmp_path):
+    from config import settings
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(settings, "DATA_FILE", str(tmp_path / "data.json"))
+    monkeypatch.setattr(settings, "SECRET_KEY", "test-secret")
+    monkeypatch.setattr(settings, "CREATE_DEMO_DATA", False)
+
+    from lambda_handler import handler
+
+    register_event = _function_url_event(
+        "POST", "/api/auth/register",
+        headers={"host": "example.com", "content-type": "application/json"},
+        body=jsonlib.dumps({"username": "lambdauser", "email": "l@example.com", "password": "pw12345"}),
+    )
+    register_result = handler(register_event, FakeContext())
+    assert register_result["statusCode"] == 201
+
+    login_event = _function_url_event(
+        "POST", "/api/auth/login",
+        headers={"host": "example.com", "content-type": "application/x-www-form-urlencoded"},
+        body="username=lambdauser&password=pw12345",
+    )
+    login_result = handler(login_event, FakeContext())
+    assert login_result["statusCode"] == 200
+    token = jsonlib.loads(login_result["body"])["access_token"]
+
+    me_event = _function_url_event(
+        "GET", "/api/auth/me",
+        headers={"host": "example.com", "authorization": f"Bearer {token}"},
+    )
+    me_result = handler(me_event, FakeContext())
+    assert me_result["statusCode"] == 200
+    assert jsonlib.loads(me_result["body"])["username"] == "lambdauser"
