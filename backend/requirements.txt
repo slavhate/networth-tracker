@@ -8,3 +8,5 @@ pydantic==2.10.4
 pydantic-settings==2.7.1
 requests==2.32.3
 httpx==0.28.1
+boto3==1.43.71
+mangum==0.21.0
