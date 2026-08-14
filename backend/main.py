@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
@@ -41,6 +41,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+@app.exception_handler(db.ConcurrentWriteError)
+async def concurrent_write_handler(request: Request, exc: db.ConcurrentWriteError):
+    """Only reachable with STORAGE_BACKEND=s3 - the local backend never raises this."""
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": "This data changed elsewhere before your update was saved. Please refresh and try again."}
+    )
 
 # ============== Auth Routes ==============
 
