@@ -164,9 +164,13 @@ removes cross-user contention entirely.
 
 - **Reserved concurrency: 2** on the Lambda function — hard cap on simultaneous
   executions, bounding worst-case cost from any traffic spike, retry storm, or abuse.
-- **AWS Budget, $5/month**, with an SNS topic emailing at 80% and 100% of threshold.
-  The notification email is a CloudFormation parameter, not hardcoded, since this
-  template lives in a public GitHub repo.
+- **AWS Budget, $5/month**, emailing at 80% and 100% of threshold. Implemented via AWS
+  Budgets' native `SubscriptionType: EMAIL` subscriber, not a separate SNS topic —
+  a third implementation-time refinement (alongside the two noted below): functionally
+  equivalent, one fewer resource, and it skips the "confirm subscription" click an SNS
+  email subscription would otherwise require. The notification email is a
+  CloudFormation parameter, not hardcoded, since this template lives in a public GitHub
+  repo.
 - **CloudFront PriceClass_100** (US/Canada/Europe edge locations only) — cheapest class;
   acceptable because CloudFront's role here is TLS termination + custom domain, not
   edge caching for a geographically distributed audience.
@@ -175,9 +179,6 @@ removes cross-user contention entirely.
   or meaningful cost is incurred. Adding WAF would introduce a mandatory recurring
   charge to defend against a threat this design already closes for free. Can be added
   later if traffic patterns ever warrant it.
-- SNS email subscriptions require a manual "confirm subscription" click in the inbox
-  after first deploy — inherent to SNS, called out in deploy instructions rather than
-  worked around.
 
 ---
 
@@ -189,7 +190,7 @@ Plain **AWS CloudFormation** (per your preference — not Terraform/CDK/SAM), sp
   bucket policy, Lambda function + execution role + reserved concurrency + Function URL
   + resource policy, Lambda-origin OAC, CloudFront distribution (two origins/behaviors,
   custom error response, aliases, ACM cert), ACM certificate, Route 53 record, AWS Budget
-  + SNS topic + email subscription.
+  with a native EMAIL subscriber (see §8 — no separate SNS topic).
 - Parameters: `NotificationEmail`, `HostedZoneId`, `DomainName` (default
   `nwt.shrikantlavhate.in`), `ReservedConcurrency` (default `2`).
 - `infra/deploy.sh` — builds the Lambda deployment package (Python deps installed for

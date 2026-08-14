@@ -406,6 +406,10 @@ The application uses a simple JSON file for data storage (`data/data.json`), mak
 - Nginx security headers (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy)
 - Import payload size limit (10MB)
 - Demo data opt-in via `CREATE_DEMO_DATA` environment variable
+- On the AWS deployment: CloudFormation's `NoEcho` keeps `SECRET_KEY` out of the
+  console/CLI, but not out of CloudTrail Event History (which logs full deploy request
+  parameters by default) — an accepted residual risk for this single-operator account,
+  documented in `infra/deploy.sh`
 
 ## Stock Market Integration
 
@@ -426,7 +430,9 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
 |----------|---------|-------------|
 | `SECRET_KEY` | _(auto-generated)_ | JWT signing key. Set for persistent sessions across restarts |
 | `CREATE_DEMO_DATA` | `false` | Set to `true` to create demo user with sample data on startup |
-| `DATA_FILE` | `../data/data.json` | Path to the JSON database file |
+| `DATA_FILE` | `../data/data.json` | Path to the JSON database file (used when `STORAGE_BACKEND=local`) |
+| `STORAGE_BACKEND` | `local` | `local` for Docker Compose, `s3` for the AWS Lambda deployment (see [AWS Serverless Deployment](#aws-serverless-deployment-optional)) |
+| `DATA_BUCKET` | _(none)_ | S3 bucket name for user data. Required when `STORAGE_BACKEND=s3`; set automatically by `infra/deploy.sh` |
 
 ### Frontend
 | Variable | Default | Description |
