@@ -42,9 +42,10 @@ def _get_json(key: str) -> Tuple[Optional[dict], Optional[str]]:
     return body, resp["ETag"]
 
 
-def _put_json(key: str, body: dict, etag: Optional[str]) -> None:
+def _put_json(key: str, body: dict, etag: Optional[str]) -> str:
     """Conditional write: If-Match the given etag, or If-None-Match '*' when
-    etag is None (this key is expected not to exist yet)."""
+    etag is None (this key is expected not to exist yet). Returns the new
+    ETag on success."""
     kwargs = {
         "Bucket": settings.DATA_BUCKET,
         "Key": key,
@@ -56,7 +57,8 @@ def _put_json(key: str, body: dict, etag: Optional[str]) -> None:
     else:
         kwargs["IfNoneMatch"] = "*"
     try:
-        _s3().put_object(**kwargs)
+        resp = _s3().put_object(**kwargs)
+        return resp["ETag"]
     except ClientError as e:
         code = e.response["Error"]["Code"]
         if code in ("PreconditionFailed", "412"):
@@ -88,9 +90,11 @@ def save_user_data(user_id: str, data: Dict[str, Any]) -> None:
     another write happened since `data` was loaded."""
     etag = data.pop("_etag", None)
     try:
-        _put_json(_user_key(user_id), data, etag)
-    finally:
+        new_etag = _put_json(_user_key(user_id), data, etag)
+        data["_etag"] = new_etag
+    except ConflictError:
         data["_etag"] = etag
+        raise
 
 
 def lookup_user_id(username: str) -> Optional[str]:

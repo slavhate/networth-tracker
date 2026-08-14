@@ -37,6 +37,18 @@ def test_save_user_data_conflict_raises(s3_bucket):
         s3_storage.save_user_data("user-1", fresh_copy)
 
 
+def test_save_user_data_updates_etag_so_second_save_on_same_dict_succeeds(s3_bucket):
+    data = s3_storage.load_user_data("user-1")
+    data["assets"].append({"id": "a1"})
+    s3_storage.save_user_data("user-1", data)  # first save (IfNoneMatch)
+
+    data["assets"].append({"id": "a2"})
+    s3_storage.save_user_data("user-1", data)  # second save on same dict, no reload
+
+    reloaded = s3_storage.load_user_data("user-1")
+    assert reloaded["assets"] == [{"id": "a1"}, {"id": "a2"}]
+
+
 def test_lookup_user_id_returns_none_when_absent(s3_bucket):
     assert s3_storage.lookup_user_id("nobody") is None
 
