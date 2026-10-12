@@ -146,6 +146,9 @@ async def get_me(username: str = Depends(get_current_user)):
 # Wrong passwords/codes here return 400, not 401: the frontend treats a 401 as an expired session.
 
 def get_current_user_record(username: str = Depends(get_current_user)) -> dict:
+    # Sync dependency: FastAPI runs it in a worker thread BEFORE the async route body, so concurrent
+    # requests can all receive the same stale record. Routes that read-modify-write the user
+    # re-read it as their first statement.
     user = db.get_user_by_username(username)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -162,6 +165,7 @@ async def two_factor_status(user: dict = Depends(get_current_user_record)):
 @app.post("/api/auth/2fa/setup", response_model=TwoFactorSetup)
 async def two_factor_setup(user: dict = Depends(get_current_user_record)):
     """Start enrollment: issue a pending secret for the authenticator app"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
     if user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
     secret = two_factor.generate_secret()
@@ -171,6 +175,7 @@ async def two_factor_setup(user: dict = Depends(get_current_user_record)):
 @app.post("/api/auth/2fa/enable", response_model=TwoFactorBackupCodes)
 async def two_factor_enable(request: TwoFactorCode, user: dict = Depends(get_current_user_record)):
     """Confirm enrollment with a code; returns backup codes (shown only this once)"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
     if user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
     pending = user.get("totp_pending_secret")
@@ -193,6 +198,7 @@ async def two_factor_enable(request: TwoFactorCode, user: dict = Depends(get_cur
 @app.post("/api/auth/2fa/disable", status_code=status.HTTP_204_NO_CONTENT)
 async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get_current_user_record)):
     """Turn off 2FA; requires the password and a current authenticator or backup code"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: lockout counters must not be stale under concurrent requests
     if not user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
     now = _now()

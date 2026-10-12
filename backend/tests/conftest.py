@@ -1,11 +1,29 @@
 import os
 import sys
+import time
 
 import pytest
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def non_utc_timezone():
+    """Run every test off-UTC: pyotp treats naive datetimes as local time, so a missing UTC conversion
+    only shows up when the machine's timezone is not UTC."""
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Kolkata"
+    if hasattr(time, "tzset"):
+        time.tzset()
+    yield
+    if previous is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = previous
+    if hasattr(time, "tzset"):
+        time.tzset()
 
 
 @pytest.fixture

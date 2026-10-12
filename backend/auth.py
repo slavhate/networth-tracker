@@ -29,8 +29,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_token(token: str) -> Optional[str]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        if payload.get("type") == "mfa":
-            return None  # a 2FA challenge token is not an access token
+        if payload.get("type") not in (None, "access"):
+            return None  # a 2FA challenge token (or any other typed token) is not an access token
         username: str = payload.get("sub")
         if username is None:
             return None

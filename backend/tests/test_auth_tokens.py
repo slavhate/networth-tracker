@@ -27,6 +27,11 @@ def test_access_token_is_not_an_mfa_token():
     assert auth.decode_token(access) == "alice"  # tokens issued before 2FA have no "type" claim
 
 
+def test_decode_token_rejects_any_other_token_type():
+    token = auth.create_access_token({"sub": "alice", "user_id": "u1", "type": "something-else"})
+    assert auth.decode_token(token) is None
+
+
 def test_expired_mfa_token_is_rejected(monkeypatch):
     monkeypatch.setattr(settings, "MFA_TOKEN_EXPIRE_MINUTES", -1)
     assert auth.decode_mfa_token(auth.create_mfa_token("alice", "u1")) is None

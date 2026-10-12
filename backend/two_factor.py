@@ -62,7 +62,8 @@ def generate_backup_codes(n: int = BACKUP_CODE_COUNT) -> List[str]:
 
 
 def hash_backup_code(code: str) -> str:
-    # Codes are random with 40 bits of entropy, so a fast hash is sufficient.
+    # Hashing only keeps backup codes out of casual view (e.g. a shared data.json). Anyone who can
+    # read data.json already has the TOTP secret, so a slow hash would add nothing.
     return hashlib.sha256(normalize_code(code).encode()).hexdigest()
 
 

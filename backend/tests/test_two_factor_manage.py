@@ -1,4 +1,10 @@
+import asyncio
+from collections import Counter
+
+import httpx
+
 import database as db
+import main
 import two_factor as tf
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
@@ -139,3 +145,28 @@ def test_disable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     for _ in range(5):
         assert disable(client, auth_headers, "wrong-pass", "123456").status_code == 400
     assert disable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP + 1)).status_code == 429
+
+
+def fire_concurrently(requests):
+    """Send (path, headers, json) requests all at once through the ASGI app; return the responses."""
+    async def run():
+        transport = httpx.ASGITransport(app=main.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            return await asyncio.gather(*[ac.post(path, headers=h, json=body) for path, h, body in requests])
+
+    return asyncio.run(run())
+
+
+def test_concurrent_disable_attempts_cannot_bypass_the_lockout(client, auth_headers, clock):
+    secret, _ = enable_2fa(client, auth_headers)
+    attempt = ("/api/auth/2fa/disable", auth_headers, {"password": PASSWORD, "code": wrong_code(secret, NOW_STEP + 1)})
+    statuses = Counter(r.status_code for r in fire_concurrently([attempt] * 30))
+    assert statuses == {400: 5, 429: 25}
+    assert client.get("/api/auth/2fa/status", headers=auth_headers).json()["enabled"] is True
+
+
+def test_concurrent_enable_succeeds_only_once(client, auth_headers, clock):
+    setup = client.post("/api/auth/2fa/setup", headers=auth_headers).json()
+    attempt = ("/api/auth/2fa/enable", auth_headers, {"code": code_for(setup["secret"], NOW_STEP)})
+    statuses = Counter(r.status_code for r in fire_concurrently([attempt] * 10))
+    assert statuses == {200: 1, 400: 9}
