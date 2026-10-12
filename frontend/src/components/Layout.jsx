@@ -15,6 +15,7 @@ import {
   Moon,
   Landmark,
   Shield,
+  ShieldCheck,
   TrendingUp,
   BarChart3,
   Eye,
@@ -152,6 +153,7 @@ export default function Layout() {
     { to: '/bank-accounts', icon: Landmark, label: 'Bank Accounts' },
     { to: '/insurances', icon: Shield, label: 'Insurances' },
     { to: '/mutual-funds', icon: TrendingUp, label: 'Mutual Funds' },
+    { to: '/security', icon: ShieldCheck, label: 'Security' },
   ];
 
   return (
