@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    MFA_TOKEN_EXPIRE_MINUTES: int = 5  # 2FA login challenge lifetime
     DATA_FILE: str = os.path.join(os.path.dirname(__file__), "..", "data", "data.json")
     CREATE_DEMO_DATA: bool = False
 

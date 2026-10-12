@@ -85,6 +85,16 @@ def create_user(username: str, email: str, hashed_password: str) -> Dict:
     save_data(data)
     return user
 
+def update_user(user_id: str, updates: Dict) -> Optional[Dict]:
+    """Apply every key in updates, including None (used to clear 2FA fields)."""
+    data = load_data()
+    for i, user in enumerate(data["users"]):
+        if user["id"] == user_id:
+            data["users"][i].update(updates)
+            save_data(data)
+            return data["users"][i]
+    return None
+
 # Asset operations
 def get_assets_by_user(user_id: str) -> List[Dict]:
     data = load_data()
