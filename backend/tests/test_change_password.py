@@ -51,6 +51,16 @@ def test_legacy_token_without_version_is_revoked_too(client, auth_headers, clock
     assert client.get("/api/auth/me", headers=legacy).status_code == 401
 
 
+def test_null_token_version_is_treated_as_zero(client, auth_headers, clock):
+    # data.json is hand-edited for 2FA recovery, so a null token_version is plausible.
+    user = db.get_user_by_username("tester")
+    db.update_user(user["id"], {"token_version": None})
+    assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
+    resp = change(client, auth_headers, OLD, NEW)
+    assert resp.status_code == 200
+    assert auth.decode_access_token(resp.json()["access_token"])["ver"] == 1
+
+
 def test_wrong_current_password_is_400_and_changes_nothing(client, auth_headers, clock):
     resp = change(client, auth_headers, "wrong-pass", NEW)
     assert resp.status_code == 400
@@ -130,6 +140,15 @@ def test_2fa_user_can_change_with_a_backup_code(client, auth_headers, clock):
     assert resp.status_code == 200
     status = client.get("/api/auth/2fa/status", headers=bearer(resp.json()["access_token"])).json()
     assert status["backup_codes_remaining"] == 9
+
+
+def test_same_password_is_rejected_before_spending_a_backup_code(client, auth_headers, clock):
+    _, codes = enable_2fa(client, auth_headers)
+    resp = change(client, auth_headers, OLD, OLD, code=codes[0])
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "New password must be different from the current password"
+    status = client.get("/api/auth/2fa/status", headers=auth_headers).json()
+    assert status["backup_codes_remaining"] == 10
 
 
 def test_2fa_challenge_started_before_the_change_cannot_finish(client, auth_headers, clock):

@@ -43,6 +43,10 @@ def decode_token(token: str) -> Optional[str]:
     payload = decode_access_token(token)
     return payload["sub"] if payload else None
 
+def token_version_of(user: dict) -> int:
+    """The user's current token version; missing or null counts as 0."""
+    return int(user.get("token_version") or 0)
+
 def create_mfa_token(username: str, user_id: str, token_version: int = 0) -> str:
     """Short-lived token proving the password step of a 2FA login succeeded."""
     return create_access_token(
@@ -71,6 +75,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
     # Tokens carry the user's token_version ("ver", missing = 0); a password change bumps it,
     # which revokes every token issued before the change.
     user = db.get_user_by_username(payload["sub"])
-    if not user or payload.get("ver", 0) != user.get("token_version", 0):
+    if not user or payload.get("ver", 0) != token_version_of(user):
         raise credentials_exception
     return payload["sub"]

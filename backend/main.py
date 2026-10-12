@@ -21,7 +21,7 @@ from models import (
 )
 from auth import (
     get_password_hash, verify_password, create_access_token,
-    get_current_user, create_mfa_token, decode_mfa_token
+    get_current_user, create_mfa_token, decode_mfa_token, token_version_of
 )
 import database as db
 import two_factor
@@ -72,7 +72,7 @@ def _now() -> datetime:
 
 def _access_token_for(user: dict) -> Token:
     access_token = create_access_token(
-        data={"sub": user["username"], "user_id": user["id"], "ver": user.get("token_version", 0)},
+        data={"sub": user["username"], "user_id": user["id"], "ver": token_version_of(user)},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return Token(access_token=access_token, token_type="bearer")
@@ -99,7 +99,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         return Token(
             token_type="mfa",
             mfa_required=True,
-            mfa_token=create_mfa_token(user["username"], user["id"], user.get("token_version", 0))
+            mfa_token=create_mfa_token(user["username"], user["id"], token_version_of(user))
         )
 
     return _access_token_for(user)
@@ -109,7 +109,7 @@ async def login_2fa(request: MfaLoginRequest):
     """Complete a 2FA login with an authenticator or backup code"""
     payload = decode_mfa_token(request.mfa_token)
     user = db.get_user_by_id(payload["user_id"]) if payload else None
-    if not user or not user.get("totp_enabled") or payload.get("ver", 0) != user.get("token_version", 0):
+    if not user or not user.get("totp_enabled") or payload.get("ver", 0) != token_version_of(user):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired login session"
@@ -244,7 +244,7 @@ async def change_password(request: PasswordChange, user: dict = Depends(get_curr
     updated = db.update_user(user["id"], {
         **second_factor_updates,
         "hashed_password": get_password_hash(request.new_password),
-        "token_version": user.get("token_version", 0) + 1,
+        "token_version": token_version_of(user) + 1,
         "totp_failed_attempts": 0,
         "totp_locked_until": None,
     })
