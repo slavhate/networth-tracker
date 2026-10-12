@@ -7,10 +7,14 @@ import main
 from totp_helpers import NOW_STEP, code_for
 
 
-def enable_2fa(client, headers):
-    """Run setup + enable at NOW_STEP. Later TOTP uses must be NOW_STEP + 1 (replay protection)."""
+def enable_2fa(client, headers, password="secret123"):
+    """Run setup + enable at NOW_STEP. Later TOTP uses must be NOW_STEP + 1 (replay protection).
+
+    The default password is that of the auth_headers fixture's user "tester".
+    """
     setup = client.post("/api/auth/2fa/setup", headers=headers).json()
-    resp = client.post("/api/auth/2fa/enable", headers=headers, json={"code": code_for(setup["secret"], NOW_STEP)})
+    body = {"password": password, "code": code_for(setup["secret"], NOW_STEP)}
+    resp = client.post("/api/auth/2fa/enable", headers=headers, json=body)
     assert resp.status_code == 200
     return setup["secret"], resp.json()["backup_codes"]
 

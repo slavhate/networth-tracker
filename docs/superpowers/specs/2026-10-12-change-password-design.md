@@ -76,7 +76,7 @@ The steps run in this order. Every error is **400, never 401** (the frontend tre
    When 2FA is off, any `code` sent is ignored.
 6. Success: `db.update_user(user["id"], {...2FA updates, "hashed_password": get_password_hash(new_password), "token_version": user.get("token_version", 0) + 1, "totp_failed_attempts": 0, "totp_locked_until": None})`, then return a `Token` built from the **updated** user (`_access_token_for(updated_user)`). Use `response_model=Token, response_model_exclude_none=True`, so the body is `{access_token, token_type: "bearer", mfa_required: false}`.
 
-The lockout fields keep their `totp_` names and live on users without 2FA too. For those users they only throttle this endpoint, because the normal login has no password lockout. Enabling 2FA later resets them (enable writes `DISABLED_FIELDS` first).
+The lockout fields keep their `totp_` names and live on users without 2FA too. For those users they only throttle this endpoint and `POST /api/auth/2fa/enable` (which also requires the password), because the normal login has no password lockout. Enabling 2FA later resets them (enable writes `DISABLED_FIELDS` first).
 
 ---
 

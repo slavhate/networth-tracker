@@ -105,6 +105,7 @@ export default function Security() {
   const [loadError, setLoadError] = useState('');
   const [setup, setSetup] = useState(null);
   const [code, setCode] = useState('');
+  const [enablePassword, setEnablePassword] = useState('');
   const [disableForm, setDisableForm] = useState({ password: '', code: '' });
   const [backupCodes, setBackupCodes] = useState(null);
   const [error, setError] = useState('');
@@ -131,6 +132,7 @@ export default function Security() {
       const res = await twoFactorAPI.setup();
       setSetup(res.data);
       setCode('');
+      setEnablePassword('');
     } catch (err) {
       setError(errorMessage(err, 'Failed to start setup'));
     } finally {
@@ -141,6 +143,7 @@ export default function Security() {
   const cancelSetup = () => {
     setSetup(null);
     setCode('');
+    setEnablePassword('');
     setError('');
   };
 
@@ -160,9 +163,10 @@ export default function Security() {
     setError('');
     setBusy(true);
     try {
-      const res = await twoFactorAPI.enable(code);
+      const res = await twoFactorAPI.enable(enablePassword, code);
       setSetup(null);
       setCode('');
+      setEnablePassword('');
       setBackupCodes(res.data.backup_codes);
       await loadStatus();
     } catch (err) {
@@ -278,10 +282,21 @@ export default function Security() {
                   {secretCopy === 'failed' && (
                     <p role="alert" className="text-red-600 dark:text-red-400">Copy failed — type the key manually</p>
                   )}
-                  <p><span className="font-medium text-gray-900 dark:text-white">2.</span> Enter the 6-digit code the app shows to confirm.</p>
+                  <p><span className="font-medium text-gray-900 dark:text-white">2.</span> Enter your password and the 6-digit code the app shows to confirm.</p>
                 </div>
               </div>
-              <form onSubmit={confirmEnable} className="flex flex-col sm:flex-row gap-3">
+              <form onSubmit={confirmEnable} className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  className="input sm:max-w-[14rem]"
+                  placeholder="Your password"
+                  aria-label="Password"
+                  value={enablePassword}
+                  onChange={(e) => setEnablePassword(e.target.value)}
+                  autoFocus
+                  required
+                />
                 <input
                   type="text"
                   inputMode="numeric"
@@ -292,10 +307,9 @@ export default function Security() {
                   aria-label="Authentication code"
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  autoFocus
                   required
                 />
-                <button type="submit" disabled={busy || code.length !== 6} className="btn-primary disabled:opacity-50">
+                <button type="submit" disabled={busy || !enablePassword || code.length !== 6} className="btn-primary disabled:opacity-50">
                   Verify &amp; enable
                 </button>
                 <button type="button" onClick={cancelSetup} className="btn-secondary">

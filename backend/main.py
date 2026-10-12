@@ -9,7 +9,7 @@ import json
 from config import settings
 from models import (
     UserCreate, User, Token, MfaLoginRequest,
-    TwoFactorCode, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes, PasswordChange,
+    TwoFactorEnable, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes, PasswordChange,
     Asset, AssetCreate, AssetUpdate,
     Liability, LiabilityCreate, LiabilityUpdate,
     DashboardMetrics, NetWorthSnapshot,
@@ -173,15 +173,22 @@ async def two_factor_setup(user: dict = Depends(get_current_user_record)):
     return TwoFactorSetup(secret=secret, otpauth_uri=two_factor.provisioning_uri(secret, user["username"]))
 
 @app.post("/api/auth/2fa/enable", response_model=TwoFactorBackupCodes)
-async def two_factor_enable(request: TwoFactorCode, user: dict = Depends(get_current_user_record)):
-    """Confirm enrollment with a code; returns backup codes (shown only this once)"""
+async def two_factor_enable(request: TwoFactorEnable, user: dict = Depends(get_current_user_record)):
+    """Confirm enrollment with the password and a code; returns backup codes (shown only this once)"""
     user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
     if user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
     pending = user.get("totp_pending_secret")
     if not pending:
         raise HTTPException(status_code=400, detail="Start setup first")
-    step = two_factor.verify_totp(pending, request.code, None, _now())
+    # The password stops a stolen session from enrolling its own authenticator and locking the owner out.
+    now = _now()
+    if two_factor.is_locked(user, now):
+        raise _too_many_attempts(user, now)
+    if not verify_password(request.password, user["hashed_password"]):
+        db.update_user(user["id"], two_factor.record_failure(user, now))
+        raise HTTPException(status_code=400, detail="Incorrect password")
+    step = two_factor.verify_totp(pending, request.code, None, now)
     if step is None:
         raise HTTPException(status_code=400, detail="Invalid authentication code")
 

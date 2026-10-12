@@ -35,7 +35,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      # 127.0.0.1, not localhost: in nginx:alpine "localhost" resolves to ::1 first, but nginx listens on IPv4 only
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
