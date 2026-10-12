@@ -6,8 +6,8 @@ import { errorMessage } from '../utils/errors';
 
 const EMPTY_FORM = { current: '', next: '', confirm: '', code: '' };
 
-export default function ChangePasswordCard({ twoFactorEnabled }) {
-  const { replaceToken } = useAuth();
+export default function ChangePasswordCard({ twoFactorEnabled, onChanged }) {
+  const { user, replaceToken } = useAuth();
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -16,6 +16,7 @@ export default function ChangePasswordCard({ twoFactorEnabled }) {
   const update = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
   const validate = () => {
+    if (!form.current) return 'Enter your current password';
     if (form.next.length < 6) return 'New password must be at least 6 characters';
     if (form.next !== form.confirm) return 'New passwords do not match';
     if (form.next === form.current) return 'New password must be different from the current password';
@@ -41,9 +42,11 @@ export default function ChangePasswordCard({ twoFactorEnabled }) {
       replaceToken(res.data.access_token);
       setForm(EMPTY_FORM);
       setSuccess("Password changed. You've been signed out on your other devices.");
+      onChanged?.(); // e.g. refresh the backup-code count a backup code may just have reduced
     } catch (err) {
       setError(errorMessage(err, 'Failed to change password'));
       setForm((prev) => ({ ...prev, code: '' }));
+      onChanged?.(); // e.g. pick up a 2FA change made elsewhere, or a spent backup code
     } finally {
       setBusy(false);
     }
@@ -78,6 +81,8 @@ export default function ChangePasswordCard({ twoFactorEnabled }) {
       )}
 
       <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+        {/* Lets browsers and password managers tie this change to the saved account. */}
+        <input type="text" name="username" autoComplete="username" value={user?.username || ''} readOnly hidden />
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label className="label" htmlFor="current-password">Current password</label>

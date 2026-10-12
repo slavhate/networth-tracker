@@ -212,7 +212,7 @@ export default function Security() {
         </div>
       )}
 
-      {status && <ChangePasswordCard twoFactorEnabled={status.enabled} />}
+      {status && <ChangePasswordCard twoFactorEnabled={status.enabled} onChanged={loadStatus} />}
 
       {status && (
         <div className="card max-w-3xl">
