@@ -2,13 +2,14 @@ from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import List
 import json
 
 from config import settings
 from models import (
-    UserCreate, User, Token,
+    UserCreate, User, Token, MfaLoginRequest,
+    TwoFactorCode, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes,
     Asset, AssetCreate, AssetUpdate,
     Liability, LiabilityCreate, LiabilityUpdate,
     DashboardMetrics, NetWorthSnapshot,
@@ -20,9 +21,10 @@ from models import (
 )
 from auth import (
     get_password_hash, verify_password, create_access_token,
-    get_current_user
+    get_current_user, create_mfa_token, decode_mfa_token
 )
 import database as db
+import two_factor
 import stock_service
 import exchange_service
 import nav_service
@@ -64,9 +66,27 @@ async def register(user_data: UserCreate):
         created_at=user["created_at"]
     )
 
-@app.post("/api/auth/login", response_model=Token)
+def _now() -> datetime:
+    """Naive UTC; patched in tests."""
+    return datetime.utcnow()
+
+def _access_token_for(user: dict) -> Token:
+    access_token = create_access_token(
+        data={"sub": user["username"], "user_id": user["id"]},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return Token(access_token=access_token, token_type="bearer")
+
+def _too_many_attempts(user: dict, now: datetime) -> HTTPException:
+    minutes = two_factor.lock_minutes_remaining(user, now)
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Too many attempts. Try again in {minutes} minutes."
+    )
+
+@app.post("/api/auth/login", response_model=Token, response_model_exclude_none=True)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Login and get access token"""
+    """Login and get an access token, or a 2FA challenge token if 2FA is enabled"""
     user = db.get_user_by_username(form_data.username)
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(
@@ -74,13 +94,40 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    access_token = create_access_token(
-        data={"sub": user["username"], "user_id": user["id"]},
-        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    
-    return Token(access_token=access_token, token_type="bearer")
+
+    if user.get("totp_enabled"):
+        return Token(
+            token_type="mfa",
+            mfa_required=True,
+            mfa_token=create_mfa_token(user["username"], user["id"])
+        )
+
+    return _access_token_for(user)
+
+@app.post("/api/auth/login/2fa", response_model=Token, response_model_exclude_none=True)
+async def login_2fa(request: MfaLoginRequest):
+    """Complete a 2FA login with an authenticator or backup code"""
+    payload = decode_mfa_token(request.mfa_token)
+    user = db.get_user_by_id(payload["user_id"]) if payload else None
+    if not user or not user.get("totp_enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired login session"
+        )
+
+    now = _now()
+    if two_factor.is_locked(user, now):
+        raise _too_many_attempts(user, now)
+
+    ok, updates = two_factor.verify_second_factor(user, request.code, now)
+    db.update_user(user["id"], updates)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication code"
+        )
+
+    return _access_token_for(user)
 
 @app.get("/api/auth/me", response_model=User)
 async def get_me(username: str = Depends(get_current_user)):
@@ -94,6 +141,79 @@ async def get_me(username: str = Depends(get_current_user)):
         email=user["email"],
         created_at=user["created_at"]
     )
+
+# ============== Two-Factor Auth Routes ==============
+# Wrong passwords/codes here return 400, not 401: the frontend treats a 401 as an expired session.
+
+def get_current_user_record(username: str = Depends(get_current_user)) -> dict:
+    # Sync dependency: FastAPI runs it in a worker thread BEFORE the async route body, so concurrent
+    # requests can all receive the same stale record. Routes that read-modify-write the user
+    # re-read it as their first statement.
+    user = db.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.get("/api/auth/2fa/status", response_model=TwoFactorStatus)
+async def two_factor_status(user: dict = Depends(get_current_user_record)):
+    """Whether 2FA is enabled and how many backup codes remain"""
+    return TwoFactorStatus(
+        enabled=bool(user.get("totp_enabled")),
+        backup_codes_remaining=len(user.get("backup_code_hashes") or [])
+    )
+
+@app.post("/api/auth/2fa/setup", response_model=TwoFactorSetup)
+async def two_factor_setup(user: dict = Depends(get_current_user_record)):
+    """Start enrollment: issue a pending secret for the authenticator app"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
+    if user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+    secret = two_factor.generate_secret()
+    db.update_user(user["id"], {"totp_pending_secret": secret})
+    return TwoFactorSetup(secret=secret, otpauth_uri=two_factor.provisioning_uri(secret, user["username"]))
+
+@app.post("/api/auth/2fa/enable", response_model=TwoFactorBackupCodes)
+async def two_factor_enable(request: TwoFactorCode, user: dict = Depends(get_current_user_record)):
+    """Confirm enrollment with a code; returns backup codes (shown only this once)"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
+    if user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+    pending = user.get("totp_pending_secret")
+    if not pending:
+        raise HTTPException(status_code=400, detail="Start setup first")
+    step = two_factor.verify_totp(pending, request.code, None, _now())
+    if step is None:
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+
+    codes = two_factor.generate_backup_codes()
+    db.update_user(user["id"], {
+        **two_factor.DISABLED_FIELDS,
+        "totp_enabled": True,
+        "totp_secret": pending,
+        "totp_last_used_step": step,
+        "backup_code_hashes": [two_factor.hash_backup_code(c) for c in codes],
+    })
+    return TwoFactorBackupCodes(backup_codes=codes)
+
+@app.post("/api/auth/2fa/disable", status_code=status.HTTP_204_NO_CONTENT)
+async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get_current_user_record)):
+    """Turn off 2FA; requires the password and a current authenticator or backup code"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: lockout counters must not be stale under concurrent requests
+    if not user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
+    now = _now()
+    if two_factor.is_locked(user, now):
+        raise _too_many_attempts(user, now)
+    if not verify_password(request.password, user["hashed_password"]):
+        db.update_user(user["id"], two_factor.record_failure(user, now))
+        raise HTTPException(status_code=400, detail="Incorrect password")
+
+    ok, updates = two_factor.verify_second_factor(user, request.code, now)
+    if not ok:
+        db.update_user(user["id"], updates)
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+
+    db.update_user(user["id"], two_factor.DISABLED_FIELDS)
 
 # ============== Asset Routes ==============
 

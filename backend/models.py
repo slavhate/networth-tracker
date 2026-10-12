@@ -36,11 +36,35 @@ class User(BaseModel):
     created_at: str
 
 class Token(BaseModel):
-    access_token: str
+    access_token: Optional[str] = None
     token_type: str
+    mfa_required: bool = False
+    mfa_token: Optional[str] = None
 
 class TokenData(BaseModel):
     username: Optional[str] = None
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str
+    code: str = Field(..., max_length=64)
+
+class TwoFactorCode(BaseModel):
+    code: str = Field(..., max_length=64)
+
+class TwoFactorDisable(BaseModel):
+    password: str
+    code: str = Field(..., max_length=64)
+
+class TwoFactorStatus(BaseModel):
+    enabled: bool
+    backup_codes_remaining: int
+
+class TwoFactorSetup(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+class TwoFactorBackupCodes(BaseModel):
+    backup_codes: List[str]
 
 class AssetBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)

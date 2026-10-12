@@ -11,6 +11,7 @@ import BankAccounts from './pages/BankAccounts';
 import Insurances from './pages/Insurances';
 import MutualFunds from './pages/MutualFunds';
 import Equities from './pages/Equities';
+import Security from './pages/Security';
 import Layout from './components/Layout';
 
 function PrivateRoute({ children }) {
@@ -70,6 +71,7 @@ function App() {
               <Route path="bank-accounts" element={<BankAccounts />} />
               <Route path="insurances" element={<Insurances />} />
               <Route path="mutual-funds" element={<MutualFunds />} />
+              <Route path="security" element={<Security />} />
             </Route>
           </Routes>
           </BrowserRouter>
