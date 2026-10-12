@@ -184,11 +184,10 @@ export default function Login() {
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     pattern="[0-9]{6}"
-                    maxLength={6}
                     className="input text-center text-2xl font-mono tracking-[0.5em]"
                     placeholder="000000"
                     value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     autoFocus
                     required
                   />

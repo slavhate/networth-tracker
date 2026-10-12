@@ -10,30 +10,46 @@ const errorMessage = (err, fallback) => {
 
 const groupSecret = (secret) => secret.match(/.{1,4}/g).join(' ');
 
+// Resolves only if the text really reached the clipboard; throws otherwise.
 const copyText = async (text) => {
   if (navigator.clipboard && window.isSecureContext) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // permission denied or document not focused: fall through to the textarea fallback
+    }
   }
   // navigator.clipboard is unavailable over plain http (common for self-hosted LAN installs)
   const textarea = document.createElement('textarea');
   textarea.value = text;
+  textarea.readOnly = true; // keeps iOS from opening the keyboard
   textarea.style.position = 'fixed';
   textarea.style.opacity = '0';
   document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
+  try {
+    textarea.select();
+    textarea.setSelectionRange(0, text.length); // iOS Safari ignores select() alone
+    const ok = document.execCommand('copy');
+    if (!ok) throw new Error('copy failed');
+  } finally {
+    document.body.removeChild(textarea);
+  }
 };
 
 function BackupCodesModal({ codes, onClose }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState(null); // null | 'copied' | 'failed'
   const text = codes.join('\n');
 
   const handleCopy = async () => {
-    await copyText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    let result = 'copied';
+    try {
+      await copyText(text);
+    } catch {
+      result = 'failed';
+    }
+    setCopyState(result);
+    setTimeout(() => setCopyState(null), result === 'copied' ? 2000 : 3000);
   };
 
   const handleDownload = () => {
@@ -45,8 +61,10 @@ function BackupCodesModal({ codes, onClose }) {
     const link = document.createElement('a');
     link.href = url;
     link.download = 'networth-tracker-backup-codes.txt';
+    document.body.appendChild(link); // some browsers ignore click() on a detached anchor
     link.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -62,15 +80,21 @@ function BackupCodesModal({ codes, onClose }) {
           ))}
         </div>
         <div className="flex gap-3 mb-3">
-          <button type="button" onClick={handleCopy} className="btn-secondary flex-1 flex items-center justify-center gap-2">
-            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-            {copied ? 'Copied' : 'Copy all'}
+          <button type="button" onClick={handleCopy} autoFocus className="btn-secondary flex-1 flex items-center justify-center gap-2">
+            {copyState === 'copied' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            {copyState === 'copied' ? 'Copied' : 'Copy all'}
           </button>
           <button type="button" onClick={handleDownload} className="btn-secondary flex-1 flex items-center justify-center gap-2">
             <Download className="w-4 h-4" />
             Download .txt
           </button>
         </div>
+        {copyState === 'failed' && (
+          <p role="alert" className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 mb-3">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            Couldn't copy — use Download .txt instead.
+          </p>
+        )}
         <button type="button" onClick={onClose} className="btn-primary w-full">
           I've saved these codes
         </button>
@@ -88,7 +112,7 @@ export default function Security() {
   const [backupCodes, setBackupCodes] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [secretCopied, setSecretCopied] = useState(false);
+  const [secretCopy, setSecretCopy] = useState(null); // null | 'copied' | 'failed'
 
   const loadStatus = async () => {
     try {
@@ -124,9 +148,14 @@ export default function Security() {
   };
 
   const copySecret = async () => {
-    await copyText(setup.secret);
-    setSecretCopied(true);
-    setTimeout(() => setSecretCopied(false), 2000);
+    let result = 'copied';
+    try {
+      await copyText(setup.secret);
+    } catch {
+      result = 'failed';
+    }
+    setSecretCopy(result);
+    setTimeout(() => setSecretCopy(null), result === 'copied' ? 2000 : 3000);
   };
 
   const confirmEnable = async (e) => {
@@ -244,9 +273,12 @@ export default function Security() {
                       className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 flex-shrink-0"
                       title="Copy key"
                     >
-                      {secretCopied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                      {secretCopy === 'copied' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
+                  {secretCopy === 'failed' && (
+                    <p role="alert" className="text-red-600 dark:text-red-400">Copy failed — type the key manually</p>
+                  )}
                   <p><span className="font-medium text-gray-900 dark:text-white">2.</span> Enter the 6-digit code the app shows to confirm.</p>
                 </div>
               </div>
@@ -256,12 +288,11 @@ export default function Security() {
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   pattern="[0-9]{6}"
-                  maxLength={6}
                   className="input sm:max-w-[12rem] text-center font-mono tracking-[0.3em]"
                   placeholder="000000"
                   aria-label="Authentication code"
                   value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   autoFocus
                   required
                 />
