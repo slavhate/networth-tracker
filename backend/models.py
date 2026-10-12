@@ -36,11 +36,17 @@ class User(BaseModel):
     created_at: str
 
 class Token(BaseModel):
-    access_token: str
+    access_token: Optional[str] = None
     token_type: str
+    mfa_required: bool = False
+    mfa_token: Optional[str] = None
 
 class TokenData(BaseModel):
     username: Optional[str] = None
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str
+    code: str = Field(..., max_length=64)
 
 class AssetBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
