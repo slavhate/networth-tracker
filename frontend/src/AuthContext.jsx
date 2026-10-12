@@ -40,6 +40,11 @@ export function AuthProvider({ children }) {
     return finishLogin(response.data.access_token);
   };
 
+  // Swap in a fresh access token, e.g. after a password change revoked the old one.
+  const replaceToken = (accessToken) => {
+    localStorage.setItem('token', accessToken);
+  };
+
   const register = async (data) => {
     await authAPI.register(data);
     return login({ username: data.username, password: data.password });
@@ -51,7 +56,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, completeMfaLogin, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, completeMfaLogin, replaceToken, register, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

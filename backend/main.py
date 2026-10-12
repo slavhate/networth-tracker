@@ -9,7 +9,7 @@ import json
 from config import settings
 from models import (
     UserCreate, User, Token, MfaLoginRequest,
-    TwoFactorCode, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes,
+    TwoFactorCode, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes, PasswordChange,
     Asset, AssetCreate, AssetUpdate,
     Liability, LiabilityCreate, LiabilityUpdate,
     DashboardMetrics, NetWorthSnapshot,
@@ -21,7 +21,7 @@ from models import (
 )
 from auth import (
     get_password_hash, verify_password, create_access_token,
-    get_current_user, create_mfa_token, decode_mfa_token
+    get_current_user, create_mfa_token, decode_mfa_token, token_version_of
 )
 import database as db
 import two_factor
@@ -72,7 +72,7 @@ def _now() -> datetime:
 
 def _access_token_for(user: dict) -> Token:
     access_token = create_access_token(
-        data={"sub": user["username"], "user_id": user["id"]},
+        data={"sub": user["username"], "user_id": user["id"], "ver": token_version_of(user)},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return Token(access_token=access_token, token_type="bearer")
@@ -99,7 +99,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         return Token(
             token_type="mfa",
             mfa_required=True,
-            mfa_token=create_mfa_token(user["username"], user["id"])
+            mfa_token=create_mfa_token(user["username"], user["id"], token_version_of(user))
         )
 
     return _access_token_for(user)
@@ -109,7 +109,7 @@ async def login_2fa(request: MfaLoginRequest):
     """Complete a 2FA login with an authenticator or backup code"""
     payload = decode_mfa_token(request.mfa_token)
     user = db.get_user_by_id(payload["user_id"]) if payload else None
-    if not user or not user.get("totp_enabled"):
+    if not user or not user.get("totp_enabled") or payload.get("ver", 0) != token_version_of(user):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired login session"
@@ -214,6 +214,41 @@ async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get
         raise HTTPException(status_code=400, detail="Invalid authentication code")
 
     db.update_user(user["id"], two_factor.DISABLED_FIELDS)
+
+# ============== Password Routes ==============
+
+@app.post("/api/auth/password", response_model=Token, response_model_exclude_none=True)
+async def change_password(request: PasswordChange, user: dict = Depends(get_current_user_record)):
+    """Change the current user's password; signs out every other session"""
+    user = db.get_user_by_id(user["id"])  # fresh copy: lockout counters must not be stale under concurrent requests
+    now = _now()
+    if two_factor.is_locked(user, now):
+        raise _too_many_attempts(user, now)
+    if not verify_password(request.current_password, user["hashed_password"]):
+        db.update_user(user["id"], two_factor.record_failure(user, now))
+        raise HTTPException(status_code=400, detail="Incorrect password")
+    # Checked before the 2FA step so a backup code is never spent on a change that would fail anyway.
+    if verify_password(request.new_password, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="New password must be different from the current password")
+
+    second_factor_updates = {}
+    if user.get("totp_enabled"):
+        if not request.code:
+            raise HTTPException(status_code=400, detail="Authentication code required")
+        ok, second_factor_updates = two_factor.verify_second_factor(user, request.code, now)
+        if not ok:
+            db.update_user(user["id"], second_factor_updates)
+            raise HTTPException(status_code=400, detail="Invalid authentication code")
+
+    # Bumping token_version revokes every token issued before this change, including this request's.
+    updated = db.update_user(user["id"], {
+        **second_factor_updates,
+        "hashed_password": get_password_hash(request.new_password),
+        "token_version": token_version_of(user) + 1,
+        "totp_failed_attempts": 0,
+        "totp_locked_until": None,
+    })
+    return _access_token_for(updated)
 
 # ============== Asset Routes ==============
 

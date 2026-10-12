@@ -24,7 +24,12 @@ api.interceptors.response.use(
   (error) => {
     // Login endpoints use 401 for bad credentials/codes; let the form show those inline.
     const isLoginRequest = error.config?.url?.startsWith('/api/auth/login');
-    if (error.response?.status === 401 && !isLoginRequest) {
+    const sentAuth = error.config?.headers?.Authorization;
+    const storedToken = localStorage.getItem('token');
+    // A request that carried an older token (e.g. sent just before a password change) must not
+    // sign out a session that has since received a fresh token.
+    const sentWithCurrentToken = !sentAuth || sentAuth === `Bearer ${storedToken}`;
+    if (error.response?.status === 401 && !isLoginRequest && sentWithCurrentToken) {
       localStorage.removeItem('token');
       window.location.href = '/login';
     }
@@ -45,6 +50,7 @@ export const authAPI = {
   },
   getMe: () => api.get('/api/auth/me'),
   verify2fa: (mfaToken, code) => api.post('/api/auth/login/2fa', { mfa_token: mfaToken, code }),
+  changePassword: (data) => api.post('/api/auth/password', data),
 };
 
 // Two-Factor Authentication API

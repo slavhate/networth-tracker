@@ -21,6 +21,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Core Features
 - **User Authentication** - Secure JWT-based authentication with registration and login
 - **Two-Factor Authentication** - Optional TOTP 2FA (Google Authenticator, Authy, 1Password, ...) with one-time backup codes, managed from the Security page
+- **Change Password** - Change your password from the Security page; your other signed-in devices are signed out
 - **Dark Mode** - Toggle between light and dark themes
 - **Privacy Mode** - Mask all financial numbers with one click (default ON for security)
 - **Data Export/Backup** - Download all your financial data as JSON for backup purposes
@@ -316,6 +317,7 @@ networth-tracker/
 | POST | `/api/auth/2fa/setup` | Start 2FA enrollment (returns secret + otpauth URI) |
 | POST | `/api/auth/2fa/enable` | Confirm enrollment with a code; returns backup codes once |
 | POST | `/api/auth/2fa/disable` | Turn off 2FA (requires password + code) |
+| POST | `/api/auth/password` | Change your password (current password, plus a code if 2FA is on); signs out other sessions |
 
 > **Locked out of 2FA?** If a user has lost both their authenticator and their backup codes, stop the app, open `data/data.json`, and remove that user's `totp_*` and `backup_code_hashes` fields. They can then sign in with just their password.
 

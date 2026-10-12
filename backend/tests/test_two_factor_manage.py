@@ -1,22 +1,11 @@
-import asyncio
 from collections import Counter
 
-import httpx
-
 import database as db
-import main
 import two_factor as tf
+from api_helpers import enable_2fa, fire_concurrently
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
 PASSWORD = "secret123"  # password of the auth_headers fixture's user "tester"
-
-
-def enable_2fa(client, headers):
-    """Run setup + enable at NOW_STEP. Later TOTP logins must use NOW_STEP + 1 (replay protection)."""
-    setup = client.post("/api/auth/2fa/setup", headers=headers).json()
-    resp = client.post("/api/auth/2fa/enable", headers=headers, json={"code": code_for(setup["secret"], NOW_STEP)})
-    assert resp.status_code == 200
-    return setup["secret"], resp.json()["backup_codes"]
 
 
 def password_login(client):
@@ -145,16 +134,6 @@ def test_disable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     for _ in range(5):
         assert disable(client, auth_headers, "wrong-pass", "123456").status_code == 400
     assert disable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP + 1)).status_code == 429
-
-
-def fire_concurrently(requests):
-    """Send (path, headers, json) requests all at once through the ASGI app; return the responses."""
-    async def run():
-        transport = httpx.ASGITransport(app=main.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-            return await asyncio.gather(*[ac.post(path, headers=h, json=body) for path, h, body in requests])
-
-    return asyncio.run(run())
 
 
 def test_concurrent_disable_attempts_cannot_bypass_the_lockout(client, auth_headers, clock):

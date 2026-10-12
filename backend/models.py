@@ -66,6 +66,11 @@ class TwoFactorSetup(BaseModel):
 class TwoFactorBackupCodes(BaseModel):
     backup_codes: List[str]
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+    code: Optional[str] = Field(None, max_length=64)
+
 class AssetBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     value: float = Field(..., ge=0)
