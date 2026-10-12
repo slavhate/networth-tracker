@@ -4,9 +4,10 @@
 """
 import hashlib
 import hmac
+import math
 import secrets
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 
 import pyotp
 
@@ -72,3 +73,45 @@ def consume_backup_code(hashes: List[str], code: str) -> Optional[List[str]]:
         if hmac.compare_digest(stored, candidate):
             return hashes[:i] + hashes[i + 1:]
     return None
+
+
+def is_locked(user: dict, now: datetime) -> bool:
+    locked_until = user.get("totp_locked_until")
+    if not locked_until:
+        return False
+    return datetime.fromisoformat(locked_until) > now
+
+
+def lock_minutes_remaining(user: dict, now: datetime) -> int:
+    remaining = datetime.fromisoformat(user["totp_locked_until"]) - now
+    return max(1, math.ceil(remaining.total_seconds() / 60))
+
+
+def record_failure(user: dict, now: datetime) -> Dict:
+    """Updates for one failed attempt; the MAX_FAILED_ATTEMPTS-th failure starts a lockout."""
+    attempts = (user.get("totp_failed_attempts") or 0) + 1
+    if attempts >= MAX_FAILED_ATTEMPTS:
+        locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+        return {"totp_failed_attempts": 0, "totp_locked_until": locked_until.isoformat()}
+    return {"totp_failed_attempts": attempts}
+
+
+def verify_second_factor(user: dict, code: str, now: datetime) -> Tuple[bool, Dict]:
+    """Check a TOTP (6 digits) or backup code (8 chars). Does not check the lock.
+
+    Returns (ok, updates): the caller persists `updates` either way.
+    """
+    normalized = normalize_code(code)
+    updates: Dict = {}
+    if len(normalized) == 6:
+        step = verify_totp(user["totp_secret"], normalized, user.get("totp_last_used_step"), now)
+        if step is not None:
+            updates["totp_last_used_step"] = step
+    elif len(normalized) == 8:
+        remaining = consume_backup_code(user.get("backup_code_hashes") or [], normalized)
+        if remaining is not None:
+            updates["backup_code_hashes"] = remaining
+    if not updates:
+        return False, record_failure(user, now)
+    updates.update({"totp_failed_attempts": 0, "totp_locked_until": None})
+    return True, updates

@@ -1,8 +1,8 @@
 import re
-from datetime import timezone
+from datetime import timedelta, timezone
 
 import two_factor as tf
-from totp_helpers import NOW, NOW_STEP, SECRET, code_for
+from totp_helpers import NOW, NOW_STEP, SECRET, code_for, wrong_code
 
 
 def test_verify_totp_returns_current_step_for_naive_utc_now():
@@ -81,3 +81,76 @@ def test_consume_backup_code_removes_only_the_used_code():
 def test_consume_backup_code_rejects_unknown_code():
     hashes = [tf.hash_backup_code(c) for c in tf.generate_backup_codes()]
     assert tf.consume_backup_code(hashes, "zzzz-zzzz") is None
+
+
+def enabled_user(**overrides):
+    user = {
+        "id": "u1",
+        "totp_enabled": True,
+        "totp_secret": SECRET,
+        "totp_last_used_step": None,
+        "backup_code_hashes": [tf.hash_backup_code("abcd-efgh"), tf.hash_backup_code("ijkl-mnop")],
+        "totp_failed_attempts": 0,
+        "totp_locked_until": None,
+    }
+    user.update(overrides)
+    return user
+
+
+def test_second_factor_totp_success_records_step_and_resets_failures():
+    ok, updates = tf.verify_second_factor(enabled_user(totp_failed_attempts=3), code_for(SECRET, NOW_STEP), NOW)
+    assert ok is True
+    assert updates == {"totp_last_used_step": NOW_STEP, "totp_failed_attempts": 0, "totp_locked_until": None}
+
+
+def test_second_factor_backup_code_success_consumes_it():
+    ok, updates = tf.verify_second_factor(enabled_user(), "IJKL-MNOP", NOW)
+    assert ok is True
+    assert updates == {
+        "backup_code_hashes": [tf.hash_backup_code("abcd-efgh")],
+        "totp_failed_attempts": 0,
+        "totp_locked_until": None,
+    }
+
+
+def test_second_factor_wrong_code_counts_a_failure():
+    ok, updates = tf.verify_second_factor(enabled_user(totp_failed_attempts=1), wrong_code(SECRET, NOW_STEP), NOW)
+    assert ok is False
+    assert updates == {"totp_failed_attempts": 2}
+
+
+def test_second_factor_malformed_code_counts_a_failure():
+    ok, updates = tf.verify_second_factor(enabled_user(), "12345", NOW)
+    assert ok is False
+    assert updates == {"totp_failed_attempts": 1}
+
+
+def test_fifth_failure_locks_for_fifteen_minutes():
+    ok, updates = tf.verify_second_factor(enabled_user(totp_failed_attempts=4), wrong_code(SECRET, NOW_STEP), NOW)
+    assert ok is False
+    assert updates == {
+        "totp_failed_attempts": 0,
+        "totp_locked_until": (NOW + timedelta(minutes=15)).isoformat(),
+    }
+
+
+def test_record_failure_uses_the_same_counter():
+    assert tf.record_failure(enabled_user(totp_failed_attempts=2), NOW) == {"totp_failed_attempts": 3}
+
+
+def test_is_locked_only_before_locked_until():
+    until = (NOW + timedelta(minutes=15)).isoformat()
+    assert tf.is_locked(enabled_user(), NOW) is False
+    assert tf.is_locked(enabled_user(totp_locked_until=until), NOW) is True
+    assert tf.is_locked(enabled_user(totp_locked_until=until), NOW + timedelta(minutes=15)) is False
+
+
+def test_lock_minutes_remaining_rounds_up():
+    until = (NOW + timedelta(minutes=10, seconds=30)).isoformat()
+    assert tf.lock_minutes_remaining(enabled_user(totp_locked_until=until), NOW) == 11
+
+
+def test_missing_fields_behave_like_defaults():
+    legacy = {"id": "u1", "totp_secret": SECRET}  # records written before 2FA lack the counters
+    assert tf.is_locked(legacy, NOW) is False
+    assert tf.verify_second_factor(legacy, wrong_code(SECRET, NOW_STEP), NOW) == (False, {"totp_failed_attempts": 1})
