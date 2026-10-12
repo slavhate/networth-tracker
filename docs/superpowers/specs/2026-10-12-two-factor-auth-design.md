@@ -48,7 +48,7 @@ The TOTP secret is stored in plaintext, alongside the password hashes. Encryptin
 
 ## 3. Backend Module: `backend/two_factor.py`
 
-Pure functions, with no I/O. Every time-dependent function takes `now: datetime` (naive UTC) so tests are deterministic. New dependency: `pyotp==2.9.0`.
+Pure functions, with no I/O. Every time-dependent function takes `now: datetime` (naive UTC) so tests are deterministic. Before calling pyotp, `now` is converted to an aware UTC datetime, because pyotp interprets a naive datetime as the server's *local* time. New dependency: `pyotp==2.9.0`.
 
 | Function | Behaviour |
 |---|---|
@@ -60,7 +60,10 @@ Pure functions, with no I/O. Every time-dependent function takes `now: datetime`
 | `hash_backup_code(code) -> str` | SHA-256 hex of `normalize_code(code)` |
 | `consume_backup_code(hashes, code) -> Optional[List[str]]` | If the hash matches one entry (constant-time compare), returns the list without it. Otherwise returns `None`. |
 | `is_locked(user, now) -> bool` | `totp_locked_until` is set and `> now` |
+| `lock_minutes_remaining(user, now) -> int` | Minutes until unlock, rounded up, minimum 1 (for the 429 message) |
+| `record_failure(user, now) -> Dict` | The failure-counter updates described below. Also used for a wrong password on disable. |
 | `verify_second_factor(user, code, now) -> Tuple[bool, Dict]` | See below |
+| `DISABLED_FIELDS` | Dict of every 2FA field mapped to its default (section 2). Written on disable. |
 
 **`verify_second_factor`** decides and returns `(ok, updates)`, where `updates` is the dict of user fields to persist. The caller persists them and acts on `ok`. It never checks the lock; callers check `is_locked` first.
 - Normalized code is 6 digits → TOTP path against `totp_secret`. On success, `updates` sets `totp_last_used_step`.
@@ -112,7 +115,13 @@ Constants: `MAX_FAILED_ATTEMPTS = 5`, `LOCKOUT_MINUTES = 15`, `BACKUP_CODE_COUNT
 | `GET /api/auth/2fa/status` | `TwoFactorStatus` |
 | `POST /api/auth/2fa/setup` | 400 `"Two-factor authentication is already enabled"` if enabled. Otherwise stores a fresh `totp_pending_secret` (replacing any earlier one) and returns `TwoFactorSetup`. |
 | `POST /api/auth/2fa/enable` (`TwoFactorCode`) | 400 if already enabled, 400 `"Start setup first"` if no pending secret. `verify_totp(pending, code, None, now)` fails → 400 `"Invalid authentication code"` (does not count toward lockout). OK → set `totp_secret`=pending, `totp_pending_secret`=None, `totp_enabled`=True, `totp_last_used_step`=matched step, store hashes of 10 new codes. Returns `TwoFactorBackupCodes` with the plain codes; this is the only time they are ever returned. |
-| `POST /api/auth/2fa/disable` (`TwoFactorDisable`) | 400 if not enabled. `is_locked` → 429. Wrong password → 401 `"Incorrect password"`, which counts as a failed attempt (increments `totp_failed_attempts` with the same lockout rule). Then `verify_second_factor`; fail → persist updates, 401 `"Invalid authentication code"`. OK → clear all 2FA fields to their defaults. Returns 204. |
+| `POST /api/auth/2fa/disable` (`TwoFactorDisable`) | 400 if not enabled. `is_locked` → 429. Wrong password → 400 `"Incorrect password"`, which counts as a failed attempt (`record_failure`). Then `verify_second_factor`; fail → persist updates, 400 `"Invalid authentication code"`. OK → write `DISABLED_FIELDS`. Returns 204. |
+
+Errors from these authenticated endpoints are **400, never 401**. The frontend treats any 401 from a non-login endpoint as "session expired" and logs the user out.
+
+Both login endpoints use `response_model_exclude_none=True`, so the 2FA-off login response is exactly `{access_token, token_type, mfa_required}`.
+
+Request `code` fields are limited to `max_length=64`, so a longer code gets 422.
 
 ---
 
@@ -176,7 +185,8 @@ Constants: `MAX_FAILED_ATTEMPTS = 5`, `LOCKOUT_MINUTES = 15`, `BACKUP_CODE_COUNT
   - Expired `mfa_token` → 401.
   - Five bad codes, then a correct one → 429; after 15 min (clock advanced) → 200.
   - Enable with a wrong code → 400. Setup while enabled → 400. Enable without setup → 400.
-  - Disable: wrong password → 401, wrong code → 401, both correct → 204 and every 2FA field is cleared; the next login returns `access_token` directly.
+  - Disable: wrong password → 400 and the session still works; wrong code → 400; both correct → 204 and every 2FA field is cleared; the next login returns `access_token` directly.
+- **All backend tests run with `TZ=Asia/Kolkata`.** pyotp treats naive datetimes as local time, so the step-pinned tests only catch a missing UTC conversion on a machine whose zone isn't UTC.
 
 **Frontend (manual, in the browser, against a local backend):**
 - Enroll by scanning the QR code or entering the secret; confirm with a code.
