@@ -57,7 +57,7 @@ export const authAPI = {
 export const twoFactorAPI = {
   status: () => api.get('/api/auth/2fa/status'),
   setup: () => api.post('/api/auth/2fa/setup'),
-  enable: (code) => api.post('/api/auth/2fa/enable', { code }),
+  enable: (password, code) => api.post('/api/auth/2fa/enable', { password, code }),
   disable: (password, code) => api.post('/api/auth/2fa/disable', { password, code }),
 };
 

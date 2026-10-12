@@ -315,7 +315,7 @@ networth-tracker/
 | GET | `/api/auth/me` | Get current user info |
 | GET | `/api/auth/2fa/status` | Whether 2FA is on and how many backup codes remain |
 | POST | `/api/auth/2fa/setup` | Start 2FA enrollment (returns secret + otpauth URI) |
-| POST | `/api/auth/2fa/enable` | Confirm enrollment with a code; returns backup codes once |
+| POST | `/api/auth/2fa/enable` | Confirm enrollment with your password and a code; returns backup codes once |
 | POST | `/api/auth/2fa/disable` | Turn off 2FA (requires password + code) |
 | POST | `/api/auth/password` | Change your password (current password, plus a code if 2FA is on); signs out other sessions |
 

@@ -48,7 +48,8 @@ class MfaLoginRequest(BaseModel):
     mfa_token: str
     code: str = Field(..., max_length=64)
 
-class TwoFactorCode(BaseModel):
+class TwoFactorEnable(BaseModel):
+    password: str
     code: str = Field(..., max_length=64)
 
 class TwoFactorDisable(BaseModel):
