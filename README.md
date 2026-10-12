@@ -316,6 +316,7 @@ networth-tracker/
 | POST | `/api/auth/2fa/setup` | Start 2FA enrollment (returns secret + otpauth URI) |
 | POST | `/api/auth/2fa/enable` | Confirm enrollment with a code; returns backup codes once |
 | POST | `/api/auth/2fa/disable` | Turn off 2FA (requires password + code) |
+| POST | `/api/auth/password` | Change your password (current password, plus a code if 2FA is on); signs out other sessions |
 
 > **Locked out of 2FA?** If a user has lost both their authenticator and their backup codes, stop the app, open `data/data.json`, and remove that user's `totp_*` and `backup_code_hashes` fields. They can then sign in with just their password.
 
