@@ -19,12 +19,25 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  const login = async (credentials) => {
-    const response = await authAPI.login(credentials);
-    localStorage.setItem('token', response.data.access_token);
+  const finishLogin = async (accessToken) => {
+    localStorage.setItem('token', accessToken);
     const userResponse = await authAPI.getMe();
     setUser(userResponse.data);
     return userResponse.data;
+  };
+
+  const login = async (credentials) => {
+    const response = await authAPI.login(credentials);
+    if (response.data.mfa_required) {
+      return { mfaRequired: true, mfaToken: response.data.mfa_token };
+    }
+    const user = await finishLogin(response.data.access_token);
+    return { mfaRequired: false, user };
+  };
+
+  const completeMfaLogin = async (mfaToken, code) => {
+    const response = await authAPI.verify2fa(mfaToken, code);
+    return finishLogin(response.data.access_token);
   };
 
   const register = async (data) => {
@@ -38,7 +51,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, completeMfaLogin, register, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

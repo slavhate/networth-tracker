@@ -22,7 +22,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // Login endpoints use 401 for bad credentials/codes; let the form show those inline.
+    const isLoginRequest = error.config?.url?.startsWith('/api/auth/login');
+    if (error.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('token');
       window.location.href = '/login';
     }
@@ -42,6 +44,15 @@ export const authAPI = {
     });
   },
   getMe: () => api.get('/api/auth/me'),
+  verify2fa: (mfaToken, code) => api.post('/api/auth/login/2fa', { mfa_token: mfaToken, code }),
+};
+
+// Two-Factor Authentication API
+export const twoFactorAPI = {
+  status: () => api.get('/api/auth/2fa/status'),
+  setup: () => api.post('/api/auth/2fa/setup'),
+  enable: (code) => api.post('/api/auth/2fa/enable', { code }),
+  disable: (password, code) => api.post('/api/auth/2fa/disable', { password, code }),
 };
 
 // Assets API
