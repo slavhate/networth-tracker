@@ -115,3 +115,14 @@ def verify_second_factor(user: dict, code: str, now: datetime) -> Tuple[bool, Di
         return False, record_failure(user, now)
     updates.update({"totp_failed_attempts": 0, "totp_locked_until": None})
     return True, updates
+
+# Every 2FA field at its default; written to the user record when 2FA is disabled.
+DISABLED_FIELDS = {
+    "totp_enabled": False,
+    "totp_secret": None,
+    "totp_pending_secret": None,
+    "totp_last_used_step": None,
+    "backup_code_hashes": [],
+    "totp_failed_attempts": 0,
+    "totp_locked_until": None,
+}

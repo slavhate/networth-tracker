@@ -9,6 +9,7 @@ import json
 from config import settings
 from models import (
     UserCreate, User, Token, MfaLoginRequest,
+    TwoFactorCode, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes,
     Asset, AssetCreate, AssetUpdate,
     Liability, LiabilityCreate, LiabilityUpdate,
     DashboardMetrics, NetWorthSnapshot,
@@ -140,6 +141,73 @@ async def get_me(username: str = Depends(get_current_user)):
         email=user["email"],
         created_at=user["created_at"]
     )
+
+# ============== Two-Factor Auth Routes ==============
+# Wrong passwords/codes here return 400, not 401: the frontend treats a 401 as an expired session.
+
+def get_current_user_record(username: str = Depends(get_current_user)) -> dict:
+    user = db.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.get("/api/auth/2fa/status", response_model=TwoFactorStatus)
+async def two_factor_status(user: dict = Depends(get_current_user_record)):
+    """Whether 2FA is enabled and how many backup codes remain"""
+    return TwoFactorStatus(
+        enabled=bool(user.get("totp_enabled")),
+        backup_codes_remaining=len(user.get("backup_code_hashes") or [])
+    )
+
+@app.post("/api/auth/2fa/setup", response_model=TwoFactorSetup)
+async def two_factor_setup(user: dict = Depends(get_current_user_record)):
+    """Start enrollment: issue a pending secret for the authenticator app"""
+    if user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+    secret = two_factor.generate_secret()
+    db.update_user(user["id"], {"totp_pending_secret": secret})
+    return TwoFactorSetup(secret=secret, otpauth_uri=two_factor.provisioning_uri(secret, user["username"]))
+
+@app.post("/api/auth/2fa/enable", response_model=TwoFactorBackupCodes)
+async def two_factor_enable(request: TwoFactorCode, user: dict = Depends(get_current_user_record)):
+    """Confirm enrollment with a code; returns backup codes (shown only this once)"""
+    if user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+    pending = user.get("totp_pending_secret")
+    if not pending:
+        raise HTTPException(status_code=400, detail="Start setup first")
+    step = two_factor.verify_totp(pending, request.code, None, _now())
+    if step is None:
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+
+    codes = two_factor.generate_backup_codes()
+    db.update_user(user["id"], {
+        **two_factor.DISABLED_FIELDS,
+        "totp_enabled": True,
+        "totp_secret": pending,
+        "totp_last_used_step": step,
+        "backup_code_hashes": [two_factor.hash_backup_code(c) for c in codes],
+    })
+    return TwoFactorBackupCodes(backup_codes=codes)
+
+@app.post("/api/auth/2fa/disable", status_code=status.HTTP_204_NO_CONTENT)
+async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get_current_user_record)):
+    """Turn off 2FA; requires the password and a current authenticator or backup code"""
+    if not user.get("totp_enabled"):
+        raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
+    now = _now()
+    if two_factor.is_locked(user, now):
+        raise _too_many_attempts(user, now)
+    if not verify_password(request.password, user["hashed_password"]):
+        db.update_user(user["id"], two_factor.record_failure(user, now))
+        raise HTTPException(status_code=400, detail="Incorrect password")
+
+    ok, updates = two_factor.verify_second_factor(user, request.code, now)
+    if not ok:
+        db.update_user(user["id"], updates)
+        raise HTTPException(status_code=400, detail="Invalid authentication code")
+
+    db.update_user(user["id"], two_factor.DISABLED_FIELDS)
 
 # ============== Asset Routes ==============
 

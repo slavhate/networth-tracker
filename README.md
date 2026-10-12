@@ -308,8 +308,15 @@ networth-tracker/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login and get token |
+| POST | `/api/auth/login` | Login and get token (returns a 2FA challenge when 2FA is on) |
+| POST | `/api/auth/login/2fa` | Complete a 2FA login with an authenticator or backup code |
 | GET | `/api/auth/me` | Get current user info |
+| GET | `/api/auth/2fa/status` | Whether 2FA is on and how many backup codes remain |
+| POST | `/api/auth/2fa/setup` | Start 2FA enrollment (returns secret + otpauth URI) |
+| POST | `/api/auth/2fa/enable` | Confirm enrollment with a code; returns backup codes once |
+| POST | `/api/auth/2fa/disable` | Turn off 2FA (requires password + code) |
+
+> **Locked out of 2FA?** If a user has lost both their authenticator and their backup codes, stop the app, open `data/data.json`, and remove that user's `totp_*` and `backup_code_hashes` fields. They can then sign in with just their password.
 
 ### Assets
 | Method | Endpoint | Description |
