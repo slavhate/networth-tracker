@@ -45,6 +45,7 @@ export const authAPI = {
   },
   getMe: () => api.get('/api/auth/me'),
   verify2fa: (mfaToken, code) => api.post('/api/auth/login/2fa', { mfa_token: mfaToken, code }),
+  changePassword: (data) => api.post('/api/auth/password', data),
 };
 
 // Two-Factor Authentication API

@@ -2,11 +2,8 @@ import { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { ShieldCheck, ShieldOff, Copy, Check, Download, KeyRound, AlertCircle } from 'lucide-react';
 import { twoFactorAPI } from '../api';
-
-const errorMessage = (err, fallback) => {
-  const detail = err.response?.data?.detail;
-  return typeof detail === 'string' ? detail : fallback;
-};
+import { errorMessage } from '../utils/errors';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 
 const groupSecret = (secret) => secret.match(/.{1,4}/g).join(' ');
 
@@ -199,7 +196,7 @@ export default function Security() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Security</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">Protect your account with two-factor authentication</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your password and two-factor authentication</p>
       </div>
 
       {loadError && (
@@ -214,6 +211,8 @@ export default function Security() {
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
         </div>
       )}
+
+      {status && <ChangePasswordCard twoFactorEnabled={status.enabled} />}
 
       {status && (
         <div className="card max-w-3xl">

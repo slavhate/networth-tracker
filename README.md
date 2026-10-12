@@ -21,6 +21,7 @@ A professional, full-featured web application for tracking personal net worth wi
 ### Core Features
 - **User Authentication** - Secure JWT-based authentication with registration and login
 - **Two-Factor Authentication** - Optional TOTP 2FA (Google Authenticator, Authy, 1Password, ...) with one-time backup codes, managed from the Security page
+- **Change Password** - Change your password from the Security page; your other signed-in devices are signed out
 - **Dark Mode** - Toggle between light and dark themes
 - **Privacy Mode** - Mask all financial numbers with one click (default ON for security)
 - **Data Export/Backup** - Download all your financial data as JSON for backup purposes
