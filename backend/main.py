@@ -72,7 +72,7 @@ def _now() -> datetime:
 
 def _access_token_for(user: dict) -> Token:
     access_token = create_access_token(
-        data={"sub": user["username"], "user_id": user["id"]},
+        data={"sub": user["username"], "user_id": user["id"], "ver": user.get("token_version", 0)},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return Token(access_token=access_token, token_type="bearer")
@@ -99,7 +99,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         return Token(
             token_type="mfa",
             mfa_required=True,
-            mfa_token=create_mfa_token(user["username"], user["id"])
+            mfa_token=create_mfa_token(user["username"], user["id"], user.get("token_version", 0))
         )
 
     return _access_token_for(user)
@@ -109,7 +109,7 @@ async def login_2fa(request: MfaLoginRequest):
     """Complete a 2FA login with an authenticator or backup code"""
     payload = decode_mfa_token(request.mfa_token)
     user = db.get_user_by_id(payload["user_id"]) if payload else None
-    if not user or not user.get("totp_enabled"):
+    if not user or not user.get("totp_enabled") or payload.get("ver", 0) != user.get("token_version", 0):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired login session"

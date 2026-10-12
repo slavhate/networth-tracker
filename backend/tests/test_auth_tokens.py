@@ -55,3 +55,15 @@ def test_update_user_sets_and_clears_fields(data_file):
 
 def test_update_user_unknown_id_returns_none(data_file):
     assert db.update_user("missing", {"totp_enabled": True}) is None
+
+
+def test_decode_access_token_returns_the_payload():
+    payload = auth.decode_access_token(auth.create_access_token({"sub": "alice", "user_id": "u1", "ver": 3}))
+    assert payload["sub"] == "alice"
+    assert payload["ver"] == 3
+    assert auth.decode_access_token(auth.create_mfa_token("alice", "u1")) is None
+
+
+def test_mfa_token_carries_the_token_version():
+    assert auth.decode_mfa_token(auth.create_mfa_token("alice", "u1", 4))["ver"] == 4
+    assert auth.decode_mfa_token(auth.create_mfa_token("alice", "u1"))["ver"] == 0
