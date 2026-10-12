@@ -285,7 +285,7 @@ export default function Security() {
                   <p><span className="font-medium text-gray-900 dark:text-white">2.</span> Enter your password and the 6-digit code the app shows to confirm.</p>
                 </div>
               </div>
-              <form onSubmit={confirmEnable} className="flex flex-col sm:flex-row gap-3">
+              <form onSubmit={confirmEnable} className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
                 <input
                   type="password"
                   autoComplete="current-password"

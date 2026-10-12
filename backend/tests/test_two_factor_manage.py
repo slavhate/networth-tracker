@@ -83,6 +83,14 @@ def test_enable_with_wrong_password_is_400_and_counted(client, auth_headers, clo
     assert client.get("/api/auth/2fa/status", headers=auth_headers).json()["enabled"] is False
 
 
+def test_enable_checks_the_password_before_the_code(client, auth_headers, clock):
+    secret = start_setup(client, auth_headers)
+    resp = enable(client, auth_headers, "wrong-pass", wrong_code(secret, NOW_STEP))
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Incorrect password"
+    assert db.get_user_by_username("tester")["totp_failed_attempts"] == 1
+
+
 def test_enable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     secret = start_setup(client, auth_headers)
     for _ in range(5):

@@ -83,7 +83,7 @@ Constants: `MAX_FAILED_ATTEMPTS = 5`, `LOCKOUT_MINUTES = 15`, `BACKUP_CODE_COUNT
 - `auth.decode_mfa_token(token) -> Optional[dict]`: returns the payload only if the signature and expiry are valid and `type == "mfa"`.
 - `auth.decode_token`: returns `None` when `payload.get("type") == "mfa"`, so challenge tokens are never accepted as access tokens. Existing access tokens have no `type` claim and stay valid.
 - `models.Token`: `access_token` becomes `Optional[str] = None`; add `mfa_required: bool = False` and `mfa_token: Optional[str] = None`. The 2FA-off response serializes the same fields as before plus `mfa_required: false`.
-- New request models: `MfaLoginRequest {mfa_token: str, code: str}`, `TwoFactorCode {code: str}`, `TwoFactorDisable {password: str, code: str}`.
+- New request models: `MfaLoginRequest {mfa_token: str, code: str}`, `TwoFactorEnable {password: str, code: str}` (the password was added after the initial release; see §5.2), `TwoFactorDisable {password: str, code: str}`.
 - New response models: `TwoFactorStatus {enabled: bool, backup_codes_remaining: int}`, `TwoFactorSetup {secret: str, otpauth_uri: str}`, `TwoFactorBackupCodes {backup_codes: List[str]}`.
 
 `main.py` gets a module-level `def _now() -> datetime: return datetime.utcnow()`. Endpoints call `_now()`, and tests monkeypatch it.
@@ -130,7 +130,7 @@ Request `code` fields are limited to `max_length=64`, so a longer code gets 422.
 ### 6.1 `api.js`
 - Response interceptor: do **not** redirect on 401 when `error.config.url` starts with `/api/auth/login`. The error propagates to the caller so it can show an inline message. This also fixes the wrong-password message being lost to a page reload.
 - `authAPI.verify2fa(mfaToken, code)` → `POST /api/auth/login/2fa`.
-- `twoFactorAPI = { status, setup, enable(code), disable(password, code) }`.
+- `twoFactorAPI = { status, setup, enable(password, code), disable(password, code) }`.
 
 ### 6.2 `AuthContext.jsx`
 - `login(credentials)`: if `response.data.mfa_required`, return `{ mfaRequired: true, mfaToken }` without touching storage. Otherwise behave as today and return `{ mfaRequired: false, user }`.
@@ -151,7 +151,7 @@ Request `code` fields are limited to `max_length=64`, so a longer code gets 422.
 - **Disabled state:** card explaining 2FA, with an "Enable two-factor authentication" button that calls `setup` and shows:
   - QR code via `qrcode.react` (`QRCodeSVG`, value=`otpauth_uri`, white background for scannability in dark mode).
   - The secret grouped in 4-char blocks, with a copy button.
-  - Code input plus a "Verify & enable" button.
+  - Password input (autofocus) and code input, plus a "Verify & enable" button that stays disabled until both are filled.
   - "Cancel" returns to the initial state.
 - **Backup-codes modal** (after a successful enable):
   - The 10 codes in a 2-column monospace grid.
@@ -184,12 +184,13 @@ Request `code` fields are limited to `max_length=64`, so a longer code gets 422.
   - `mfa_token` used as a Bearer token on `/api/auth/me` → 401.
   - Expired `mfa_token` → 401.
   - Five bad codes, then a correct one → 429; after 15 min (clock advanced) → 200.
-  - Enable with a wrong code → 400. Setup while enabled → 400. Enable without setup → 400.
+  - Enable with a wrong code → 400 (not counted). Setup while enabled → 400. Enable without setup → 400.
+  - Enable without a password → 422; with a wrong password → 400 and counted; five wrong passwords → 429; 30 concurrent wrong passwords → exactly 5×400 and 25×429.
   - Disable: wrong password → 400 and the session still works; wrong code → 400; both correct → 204 and every 2FA field is cleared; the next login returns `access_token` directly.
 - **All backend tests run with `TZ=Asia/Kolkata`.** pyotp treats naive datetimes as local time, so the step-pinned tests only catch a missing UTC conversion on a machine whose zone isn't UTC.
 
 **Frontend (manual, in the browser, against a local backend):**
-- Enroll by scanning the QR code or entering the secret; confirm with a code.
+- Enroll by scanning the QR code or entering the secret; confirm with your password and a code (a wrong password shows an inline error).
 - Backup-codes modal: copy and download work.
 - Log out, then log in with TOTP; log out, then log in with a backup code; the remaining count drops by one.
 - A wrong code shows an inline error with no page reload. A wrong password also shows an inline error.
