@@ -39,3 +39,6 @@ backend/tests/
 backend/requirements-dev.txt
 backend/.pytest_cache/
 frontend/src/utils/*.check.js
+
+# Design specs and plans (kept locally, not published)
+docs/superpowers/
