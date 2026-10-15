@@ -84,9 +84,7 @@ export default function Login() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
-            <span className="text-4xl">💰</span>
-          </div>
+          <img src="/logo.png" alt="NetWorth Tracker" className="inline-block w-16 h-16 rounded-2xl shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-gray-900">
             {step === 'code' ? 'Two-factor authentication' : 'Welcome Back'}
           </h1>

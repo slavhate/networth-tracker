@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     MFA_TOKEN_EXPIRE_MINUTES: int = 5  # 2FA login challenge lifetime
     DATA_FILE: str = os.path.join(os.path.dirname(__file__), "..", "data", "data.json")
     CREATE_DEMO_DATA: bool = False
+    DEMO_USERNAME: str = "demo"
+    DEMO_PASSWORD: str = ""  # empty = a random password is generated when the demo user is created
+    NPS_NAV_API_URL: str = "https://npsnav.in/api"  # NPS scheme list and NAV history (npsnav.in, or a mirror)
 
     class Config:
         env_file = ".env"

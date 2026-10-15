@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
-import { dashboardAPI, goalAPI } from '../api';
+import { dashboardAPI, goalAPI, snapshotSettingsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatDate, formatMonthYear, todayIso } from '../utils/dates';
+import { categoryLabel } from '../utils/assetCategories';
+import { ASSET_CLASSES } from '../utils/assetClasses';
+import { errorMessage } from '../utils/errors';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -13,7 +17,9 @@ import {
   Camera,
   Target,
   Edit2,
-  X
+  X,
+  CalendarClock,
+  Layers
 } from 'lucide-react';
 import {
   PieChart as RechartsPieChart,
@@ -28,7 +34,9 @@ import {
   Tooltip,
   Legend,
   BarChart,
-  Bar
+  Bar,
+  AreaChart,
+  Area
 } from 'recharts';
 
 const COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -42,9 +50,18 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
-const formatCategoryName = (name) => {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-};
+// The x-axis label of a snapshot on the history charts
+const snapshotDateLabel = (timestamp) =>
+  new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
+
+// How often the dashboard saves an automatic snapshot; `phrase` completes the empty-state hint
+const SNAPSHOT_FREQUENCIES = [
+  { value: 'weekly', label: 'Weekly', phrase: 'every week' },
+  { value: 'fortnightly', label: 'Every 2 weeks', phrase: 'every 2 weeks' },
+  { value: 'monthly', label: 'Monthly', phrase: 'once a month' },
+  { value: 'quarterly', label: 'Quarterly', phrase: 'once a quarter' },
+];
+const DEFAULT_SNAPSHOT_FREQUENCY = 'monthly';
 
 export default function Dashboard() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
@@ -52,10 +69,28 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [frequencySaving, setFrequencySaving] = useState(false);
+  const [frequencyError, setFrequencyError] = useState('');
   const [goal, setGoal] = useState(null);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [goalInput, setGoalInput] = useState('');
   const [goalSaving, setGoalSaving] = useState(false);
+  const [allocationView, setAllocationView] = useState(() => {
+    try {
+      return localStorage.getItem('allocationView') === 'holding' ? 'holding' : 'class';
+    } catch {
+      return 'class';
+    }
+  });
+
+  const changeAllocationView = (view) => {
+    setAllocationView(view);
+    try {
+      localStorage.setItem('allocationView', view);
+    } catch {
+      // storage unavailable (private mode, blocked) - the choice just won't persist
+    }
+  };
 
   const fetchDashboard = async () => {
     try {
@@ -88,6 +123,25 @@ export default function Dashboard() {
       setError('Failed to create snapshot');
     } finally {
       setSnapshotLoading(false);
+    }
+  };
+
+  // Saves the new frequency straight away; the response also carries the recalculated next date
+  const changeSnapshotFrequency = async (value) => {
+    try {
+      setFrequencySaving(true);
+      setFrequencyError('');
+      const response = await snapshotSettingsAPI.update(value);
+      setMetrics((current) => ({
+        ...current,
+        snapshot_frequency: response.data.frequency,
+        next_snapshot_on: response.data.next_snapshot_on
+      }));
+    } catch (err) {
+      // Shown inline: the page-level error would replace the whole dashboard
+      setFrequencyError(errorMessage(err, 'Failed to change the snapshot frequency'));
+    } finally {
+      setFrequencySaving(false);
     }
   };
 
@@ -128,29 +182,58 @@ export default function Dashboard() {
 
   const netWorthPositive = metrics?.net_worth >= 0;
 
+  // Older responses without the field show the default
+  const snapshotFrequency = SNAPSHOT_FREQUENCIES.find((f) => f.value === metrics?.snapshot_frequency)
+    || SNAPSHOT_FREQUENCIES.find((f) => f.value === DEFAULT_SNAPSHOT_FREQUENCY);
+
   // Format currency with privacy mode support
   const formatCurrency = (value) => {
     if (privacyMode) return '₹ ••••••';
     return formatCurrencyRaw(value);
   };
 
+  // Value-axis tick, e.g. ₹250k; hidden in privacy mode like every other amount
+  const formatAxisAmount = (value) => (privacyMode ? '••' : `₹${(value / 1000).toFixed(0)}k`);
+
+  // Latest snapshot from an earlier calendar month (history is newest first)
+  const thisMonth = todayIso().slice(0, 7);
+  const previousSnapshot = (metrics?.net_worth_history || []).find((s) => s.timestamp.slice(0, 7) < thisMonth);
+  const netWorthChange = previousSnapshot ? metrics.net_worth - previousSnapshot.net_worth : null;
+  const netWorthChangePercent = previousSnapshot && previousSnapshot.net_worth !== 0
+    ? (netWorthChange / Math.abs(previousSnapshot.net_worth)) * 100 : null;
+
   // Prepare chart data
-  const assetChartData = Object.entries(metrics?.assets_by_category || {}).map(([name, value]) => ({
-    name: formatCategoryName(name),
-    value
-  }));
+  const assetChartData = allocationView === 'class'
+    ? ASSET_CLASSES
+        .filter((c) => (metrics?.assets_by_class?.[c.key] || 0) > 0)
+        .map((c) => ({ name: c.label, value: metrics.assets_by_class[c.key], color: c.color }))
+    : Object.entries(metrics?.assets_by_category || {}).map(([name, value], index) => ({
+        name: categoryLabel(name),
+        value,
+        color: COLORS[index % COLORS.length]
+      }));
 
   const liabilityChartData = Object.entries(metrics?.liabilities_by_category || {}).map(([name, value]) => ({
-    name: formatCategoryName(name),
+    name: categoryLabel(name),
     value
   }));
 
   const historyData = [...(metrics?.net_worth_history || [])].reverse().map((snapshot) => ({
-    date: new Date(snapshot.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    date: snapshotDateLabel(snapshot.timestamp),
     netWorth: snapshot.net_worth,
     assets: snapshot.total_assets,
     liabilities: snapshot.total_liabilities
   }));
+
+  // Snapshots without a breakdown (older ones) are skipped; unknown class keys are ignored
+  const allocationHistory = [...(metrics?.net_worth_history || [])].reverse()
+    .filter((s) => s.assets_by_class)
+    .map((s) => ({
+      date: snapshotDateLabel(s.timestamp),
+      ...Object.fromEntries(ASSET_CLASSES.map((c) => [c.key, s.assets_by_class[c.key] || 0])),
+    }));
+  // Only classes that appear in at least one plotted snapshot get an area (and a legend entry)
+  const plottedClasses = ASSET_CLASSES.filter((c) => allocationHistory.some((point) => point[c.key] > 0));
 
   return (
     <div className="space-y-6">
@@ -160,22 +243,44 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Track your financial health</p>
         </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={fetchDashboard}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Refresh
-          </button>
-          <button 
-            onClick={handleSnapshot}
-            disabled={snapshotLoading}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Camera className="w-4 h-4" />
-            {snapshotLoading ? 'Saving...' : 'Save Snapshot'}
-          </button>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={fetchDashboard}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="auto-snapshot" className="text-sm text-gray-600 dark:text-gray-400">Auto snapshot</label>
+              <select
+                id="auto-snapshot"
+                className="input !w-auto !py-2 text-sm"
+                value={snapshotFrequency.value}
+                onChange={(e) => changeSnapshotFrequency(e.target.value)}
+                disabled={frequencySaving}
+              >
+                {SNAPSHOT_FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={handleSnapshot}
+              disabled={snapshotLoading}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Camera className="w-4 h-4" />
+              {snapshotLoading ? 'Saving...' : 'Save Snapshot'}
+            </button>
+          </div>
+          {metrics?.next_snapshot_on && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 sm:max-w-md sm:text-right">
+              Next automatic snapshot: {formatDate(metrics.next_snapshot_on)}, saved when you open the dashboard on or after that day.
+            </p>
+          )}
+          {frequencyError && (
+            <p role="alert" className="text-xs text-red-600 dark:text-red-400">{frequencyError}</p>
+          )}
         </div>
       </div>
 
@@ -193,6 +298,12 @@ export default function Dashboard() {
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
+              {netWorthChange != null && (
+                <p className={`text-xs mt-1 ${netWorthChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {netWorthChange >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(netWorthChange))}
+                  {netWorthChangePercent != null && <> ({privacyMode ? '••' : `${Math.abs(netWorthChangePercent).toFixed(1)}%`})</>} since {formatMonthYear(previousSnapshot.timestamp.slice(0, 10))}
+                </p>
+              )}
             </div>
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${netWorthPositive ? 'bg-green-100' : 'bg-red-100'}`}>
               {netWorthPositive ? (
@@ -424,13 +535,64 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Deposits maturing */}
+      {metrics?.maturities?.length > 0 && (
+        <div className="card border-l-4 border-l-amber-500">
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarClock className="w-5 h-5 text-amber-600" />
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Deposits maturing</h2>
+          </div>
+          <ul className="space-y-2">
+            {metrics.maturities.map((m) => {
+              const label = `${m.bank_name} ${m.account_type.toUpperCase()}`;
+              return (
+                <li key={m.id} className="text-sm">
+                  {m.days_to_maturity <= 0 ? (
+                    <span className="text-red-600 dark:text-red-400 font-medium">
+                      {label} matured on {formatDate(m.maturity_date)} — update or renew it
+                    </span>
+                  ) : (
+                    <span className="text-gray-700 dark:text-gray-300">
+                      {label} matures in {m.days_to_maturity} day{m.days_to_maturity === 1 ? '' : 's'}
+                      {m.maturity_value != null && <> ({formatCurrency(m.maturity_value)})</>}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Asset Allocation */}
         <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <PieChart className="w-5 h-5 text-primary-600" />
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Asset Allocation</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div className="flex items-center gap-2">
+              <PieChart className="w-5 h-5 text-primary-600" />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Asset Allocation</h2>
+            </div>
+            <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-600 p-0.5">
+              {[
+                { view: 'class', label: 'By asset class' },
+                { view: 'holding', label: 'By holding' }
+              ].map(({ view, label }) => (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => changeAllocationView(view)}
+                  aria-pressed={allocationView === view}
+                  className={`text-xs px-2.5 py-1 rounded-md ${
+                    allocationView === view
+                      ? 'bg-primary-600 text-white'
+                      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           {assetChartData.length > 0 ? (
             <div className="h-64">
@@ -448,7 +610,7 @@ export default function Dashboard() {
                     labelLine={false}
                   >
                     {assetChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(value) => formatCurrency(value)} />
@@ -473,7 +635,7 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={liabilityChartData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
-                  <XAxis type="number" tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`} />
+                  <XAxis type="number" tickFormatter={formatAxisAmount} />
                   <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 12 }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Bar dataKey="value" fill="#f97316" radius={[0, 4, 4, 0]} />
@@ -500,10 +662,10 @@ export default function Dashboard() {
               <LineChart data={historyData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`} />
+                <YAxis tickFormatter={formatAxisAmount} />
                 <Tooltip formatter={(value) => formatCurrency(value)} />
                 <Legend />
-                <Line 
+                <Line
                   type="monotone" 
                   dataKey="assets" 
                   stroke="#0ea5e9" 
@@ -534,8 +696,45 @@ export default function Dashboard() {
           <div className="h-72 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <p>No history yet.</p>
-              <p className="text-sm mt-1">Click "Save Snapshot" to start tracking your progress over time.</p>
+              <p className="text-sm mt-1">A snapshot is saved automatically {snapshotFrequency.phrase} when you open the dashboard; Save Snapshot adds one now.</p>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Allocation History */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Layers className="w-5 h-5 text-primary-600" />
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Allocation History</h2>
+        </div>
+        {allocationHistory.length >= 2 ? (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={allocationHistory}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={formatAxisAmount} />
+                <Tooltip formatter={(value) => formatCurrency(value)} />
+                <Legend />
+                {plottedClasses.map((c) => (
+                  <Area
+                    key={c.key}
+                    type="monotone"
+                    dataKey={c.key}
+                    name={c.label}
+                    stackId="1"
+                    stroke={c.color}
+                    fill={c.color}
+                    fillOpacity={0.6}
+                  />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="h-72 flex items-center justify-center text-gray-400">
+            <p className="text-center">Allocation history appears once two snapshots have a breakdown.</p>
           </div>
         )}
       </div>

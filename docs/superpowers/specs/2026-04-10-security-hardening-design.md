@@ -10,13 +10,13 @@
 
 ### 1.1 Hardcoded JWT Secret Key (config.py)
 
-**Problem:** `SECRET_KEY` is hardcoded as `"your-secret-key-change-in-production-abc123def456"`. Anyone who reads the source can forge JWT tokens for any user.
+**Problem:** `SECRET_KEY` is hardcoded in `config.py`. Anyone who reads the source can forge JWT tokens for any user.
 
 **Fix:** Read `SECRET_KEY` from `os.environ`. If not set, auto-generate a random 64-char hex string at startup and log a warning. Tokens won't survive restarts without a configured key, which is acceptable for personal use.
 
 ### 1.2 Demo User Auto-Creation (main.py)
 
-**Problem:** A demo user with username `"demo"` and password `"password123"` is created on every startup unconditionally. This is a known weak credential.
+**Problem:** A demo user `demo` with a fixed, publicly known password is created on every startup unconditionally. This is a known weak credential.
 
 **Fix:** Gate demo data seeding behind env var `CREATE_DEMO_DATA`. Only create demo data when `CREATE_DEMO_DATA=true`. Default is `false`.
 
@@ -79,7 +79,7 @@
 
 ### 2.5 Docker Compose Secret Fix (docker-compose.yml)
 
-**Problem:** `SECRET_KEY=your-production-secret-key-change-this` is a placeholder that will be used as-is.
+**Problem:** The `SECRET_KEY` value in `docker-compose.yml` is a placeholder that will be used as-is.
 
 **Fix:**
 - Remove the insecure placeholder, leave it commented with instructions

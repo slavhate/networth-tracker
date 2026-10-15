@@ -2,6 +2,7 @@ import re
 from datetime import timedelta, timezone
 
 import two_factor as tf
+from credentials import USERNAME
 from totp_helpers import NOW, NOW_STEP, SECRET, code_for, wrong_code
 
 
@@ -43,10 +44,10 @@ def test_verify_totp_rejects_malformed_codes_without_raising():
 
 
 def test_provisioning_uri_names_issuer_user_and_secret():
-    uri = tf.provisioning_uri(SECRET, "alice")
+    uri = tf.provisioning_uri(SECRET, USERNAME)
     assert uri.startswith("otpauth://totp/")
     assert "issuer=NetWorth%20Tracker" in uri
-    assert "alice" in uri
+    assert USERNAME in uri
     assert f"secret={SECRET}" in uri
 
 

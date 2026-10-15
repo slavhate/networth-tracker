@@ -5,16 +5,15 @@ import pytest
 import database as db
 import two_factor as tf
 from config import settings
+from credentials import EMAIL, OTHER_EMAIL, OTHER_USERNAME, PASSWORD, USERNAME, WRONG_PASSWORD
 from totp_helpers import NOW, NOW_STEP, code_for, step_of, wrong_code
-
-PASSWORD = "secret123"
 
 
 @pytest.fixture
 def mfa_user(client):
-    """Registered user 'alice' with 2FA switched on directly in the data file."""
-    client.post("/api/auth/register", json={"username": "alice", "password": PASSWORD, "email": "a@example.com"})
-    user = db.get_user_by_username("alice")
+    """Registered user USERNAME with 2FA switched on directly in the data file."""
+    client.post("/api/auth/register", json={"username": USERNAME, "password": PASSWORD, "email": EMAIL})
+    user = db.get_user_by_username(USERNAME)
     secret = tf.generate_secret()
     codes = tf.generate_backup_codes()
     db.update_user(user["id"], {
@@ -26,7 +25,7 @@ def mfa_user(client):
 
 
 def start_login(client):
-    resp = client.post("/api/auth/login", data={"username": "alice", "password": PASSWORD})
+    resp = client.post("/api/auth/login", data={"username": USERNAME, "password": PASSWORD})
     assert resp.status_code == 200
     return resp.json()["mfa_token"]
 
@@ -36,8 +35,8 @@ def finish_login(client, mfa_token, code):
 
 
 def test_login_without_2fa_is_unchanged(client):
-    client.post("/api/auth/register", json={"username": "bob", "password": PASSWORD, "email": "b@example.com"})
-    resp = client.post("/api/auth/login", data={"username": "bob", "password": PASSWORD})
+    client.post("/api/auth/register", json={"username": OTHER_USERNAME, "password": PASSWORD, "email": OTHER_EMAIL})
+    resp = client.post("/api/auth/login", data={"username": OTHER_USERNAME, "password": PASSWORD})
     assert resp.status_code == 200
     body = resp.json()
     assert set(body) == {"access_token", "token_type", "mfa_required"}
@@ -48,12 +47,12 @@ def test_login_without_2fa_is_unchanged(client):
 
 
 def test_wrong_password_is_still_401(client, mfa_user):
-    resp = client.post("/api/auth/login", data={"username": "alice", "password": "wrong-pass"})
+    resp = client.post("/api/auth/login", data={"username": USERNAME, "password": WRONG_PASSWORD})
     assert resp.status_code == 401
 
 
 def test_login_with_2fa_returns_challenge_instead_of_access_token(client, mfa_user):
-    body = client.post("/api/auth/login", data={"username": "alice", "password": PASSWORD}).json()
+    body = client.post("/api/auth/login", data={"username": USERNAME, "password": PASSWORD}).json()
     assert body["mfa_required"] is True
     assert body["token_type"] == "mfa"
     assert body["mfa_token"]
@@ -70,7 +69,7 @@ def test_totp_code_completes_login(client, mfa_user, clock):
     assert resp.status_code == 200
     token = resp.json()["access_token"]
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert me.json()["username"] == "alice"
+    assert me.json()["username"] == USERNAME
 
 
 def test_totp_code_cannot_be_replayed(client, mfa_user, clock):
@@ -85,7 +84,7 @@ def test_backup_code_works_once(client, mfa_user, clock):
     code = mfa_user["codes"][0].upper()
     assert finish_login(client, start_login(client), code).status_code == 200
     assert finish_login(client, start_login(client), code).status_code == 401
-    assert len(db.get_user_by_username("alice")["backup_code_hashes"]) == 9
+    assert len(db.get_user_by_username(USERNAME)["backup_code_hashes"]) == 9
 
 
 def test_wrong_code_is_401(client, mfa_user, clock):

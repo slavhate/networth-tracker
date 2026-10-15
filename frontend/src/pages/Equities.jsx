@@ -12,20 +12,20 @@ import {
   RefreshCw,
   BarChart3
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
+import { DEFAULT_USD_TO_INR, isUsdMarket } from '../utils/markets';
 
 const MARKETS = [
   { value: 'NSE', label: 'NSE (India)', color: 'bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-400' },
   { value: 'BSE', label: 'BSE (India)', color: 'bg-purple-100 text-purple-600 dark:bg-purple-900/50 dark:text-purple-400' },
   { value: 'NASDAQ', label: 'NASDAQ (US)', color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
+  { value: 'NYSE', label: 'NYSE (US)', color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
 ];
-
-// Default rate (fallback)
-const DEFAULT_USD_TO_INR = 83.5;
 
 const getMarketInfo = (value) => MARKETS.find(m => m.value === value) || MARKETS[0];
 
 const formatCurrencyRaw = (value, market = 'NSE') => {
-  if (market === 'NASDAQ') {
+  if (isUsdMarket(market)) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
@@ -170,7 +170,7 @@ export default function Equities() {
       closeModal();
       fetchEquities(true);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save equity');
+      setError(errorMessage(err, 'Failed to save equity'));
     } finally {
       setSubmitting(false);
     }
@@ -188,17 +188,17 @@ export default function Equities() {
   };
 
   const formatCurrency = (value, market = 'NSE') => {
-    if (privacyMode) return market === 'NASDAQ' ? '$ ••••••' : '₹ ••••••';
+    if (privacyMode) return isUsdMarket(market) ? '$ ••••••' : '₹ ••••••';
     return formatCurrencyRaw(value, market);
   };
 
-  // Calculate totals in INR (convert NASDAQ USD to INR)
+  // Calculate totals in INR (convert US-market USD to INR)
   const totalInvestedINR = equities.reduce((sum, e) => {
-    const amount = e.market === 'NASDAQ' ? e.invested_amount * usdToInr : e.invested_amount;
+    const amount = isUsdMarket(e.market) ? e.invested_amount * usdToInr : e.invested_amount;
     return sum + amount;
   }, 0);
   const totalCurrentValueINR = equities.reduce((sum, e) => {
-    const amount = e.market === 'NASDAQ' ? e.current_value * usdToInr : e.current_value;
+    const amount = isUsdMarket(e.market) ? e.current_value * usdToInr : e.current_value;
     return sum + amount;
   }, 0);
   const totalGainLossINR = totalCurrentValueINR - totalInvestedINR;

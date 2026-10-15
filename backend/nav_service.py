@@ -3,11 +3,16 @@ Mutual Fund NAV Service - Fetches current NAV from mfapi.in (free API for Indian
 """
 import httpx
 import time
-from typing import Optional, Dict, List
+from datetime import date
+from typing import Optional, Dict, List, Tuple
 import re
+
+from nps_service import parse_history  # mfapi.in uses the same {"data": [{"date", "nav"}]} shape
 
 # Cache for NAV data (scheme_code -> {nav, timestamp})
 _nav_cache: Dict[str, Dict] = {}
+# Cache for NAV history (scheme_code -> {data, timestamp})
+_history_cache: Dict[str, Dict] = {}
 # Cache for search results (search_term -> {results, timestamp})
 _search_cache: Dict[str, Dict] = {}
 
@@ -86,6 +91,34 @@ async def fetch_nav_by_scheme_code(scheme_code: str) -> Optional[Dict]:
         print(f"Error fetching NAV for scheme {scheme_code}: {e}")
     
     return None
+
+
+async def _get_history_json(scheme_code: str):
+    """mfapi.in's full NAV history for a scheme; None on any network, HTTP or decoding error."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"https://api.mfapi.in/mf/{scheme_code}")
+            response.raise_for_status()
+            return response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def fetch_history(scheme_code: str) -> Optional[List[Tuple[date, float]]]:
+    """Every NAV the scheme has published, oldest first; None when unavailable. Cached like the latest NAV."""
+    # ASCII digits only: str.isdigit() also accepts other scripts' digits, which don't belong in the URL
+    code = str(scheme_code or "")
+    if not (code.isascii() and code.isdigit()):
+        return None
+    cached = _history_cache.get(code)
+    if cached and time.time() - cached["timestamp"] < NAV_CACHE_DURATION:
+        return list(cached["data"])
+    payload = await _get_history_json(code)
+    history = parse_history(payload) if payload is not None else []
+    if not history:
+        return None
+    _history_cache[code] = {"data": history, "timestamp": time.time()}
+    return list(history)
 
 
 async def fetch_nav_by_fund_name(fund_name: str) -> Optional[Dict]:

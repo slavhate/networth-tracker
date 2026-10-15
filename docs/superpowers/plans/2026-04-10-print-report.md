@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 18, Vite, Tailwind CSS (sidebar only), vanilla HTML/CSS in generated report, lucide-react icons, existing axios API layer
 
-**Project root:** `c:/Users/slavhate/networth-tracker`
+**Project root:** `<repo>`
 
 ---
 
@@ -601,7 +601,7 @@ With:
 - [ ] **Step 6: Commit**
 
 ```bash
-cd c:/Users/slavhate/networth-tracker
+cd <repo>
 git add frontend/src/utils/reportGenerator.js frontend/src/components/Layout.jsx
 git commit -m "feat: add print-friendly HTML report export"
 ```
@@ -613,7 +613,7 @@ git commit -m "feat: add print-friendly HTML report export"
 - [ ] **Step 1: Start the frontend dev server**
 
 ```bash
-cd c:/Users/slavhate/networth-tracker/frontend
+cd <repo>/frontend
 npm run dev
 ```
 
@@ -621,7 +621,7 @@ Expected: Vite dev server starts, app available at http://localhost:5173
 
 - [ ] **Step 2: Log in and click Print Report**
 
-Open http://localhost:5173, log in with demo/password123.
+Open http://localhost:5173 and log in as the demo user (its password is printed in the backend log).
 
 In the sidebar, scroll to the bottom — you should see a purple "Print Report" button below the Backup/Restore row.
 
@@ -657,7 +657,7 @@ Expected: clean print preview — no sidebar or browser chrome visible in the re
 Once verified working in dev, rebuild the frontend Docker image and push:
 
 ```bash
-cd /mnt/c/Users/slavhate/networth-tracker
+cd /mnt/c/<path-to>/networth-tracker
 docker build -t shri32msi/networth-tracker:frontend --build-arg VITE_API_URL= ./frontend
 docker push shri32msi/networth-tracker:frontend
 ```

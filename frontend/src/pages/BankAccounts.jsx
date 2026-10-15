@@ -14,6 +14,8 @@ import {
   Clock,
   CalendarClock
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
+import { formatDate } from '../utils/dates';
 
 const ACCOUNT_TYPES = [
   { value: 'savings', label: 'Savings Account', icon: PiggyBank, color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
@@ -22,6 +24,15 @@ const ACCOUNT_TYPES = [
   { value: 'fd', label: 'Fixed Deposit', icon: Clock, color: 'bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400' },
   { value: 'rd', label: 'Recurring Deposit', icon: CalendarClock, color: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400' },
 ];
+
+const DEPOSIT_TYPES = ['fd', 'rd'];
+
+const emptyForm = () => ({
+  bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '',
+  interest_rate: '', start_date: '', maturity_date: '', monthly_deposit: '',
+});
+
+const balanceLabel = (type) => (type === 'fd' ? 'Principal (₹)' : type === 'rd' ? 'Deposited so far (₹)' : 'Balance (₹)');
 
 const getAccountTypeInfo = (value) => ACCOUNT_TYPES.find(t => t.value === value) || ACCOUNT_TYPES[0];
 
@@ -45,14 +56,7 @@ export default function BankAccounts() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
-  const [formData, setFormData] = useState({
-    bank_name: '',
-    account_number: '',
-    account_type: 'savings',
-    balance: '',
-    branch: '',
-    ifsc_code: ''
-  });
+  const [formData, setFormData] = useState(emptyForm);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -82,11 +86,15 @@ export default function BankAccounts() {
         account_type: account.account_type,
         balance: account.balance.toString(),
         branch: account.branch || '',
-        ifsc_code: account.ifsc_code || ''
+        ifsc_code: account.ifsc_code || '',
+        interest_rate: account.interest_rate?.toString() ?? '',
+        start_date: account.start_date || '',
+        maturity_date: account.maturity_date || '',
+        monthly_deposit: account.monthly_deposit?.toString() ?? ''
       });
     } else {
       setEditingAccount(null);
-      setFormData({ bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '' });
+      setFormData(emptyForm());
     }
     setError('');
     setModalOpen(true);
@@ -95,7 +103,7 @@ export default function BankAccounts() {
   const closeModal = () => {
     setModalOpen(false);
     setEditingAccount(null);
-    setFormData({ bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '' });
+    setFormData(emptyForm());
   };
 
   const handleSubmit = async (e) => {
@@ -104,13 +112,19 @@ export default function BankAccounts() {
     setSubmitting(true);
 
     try {
+      const isDeposit = DEPOSIT_TYPES.includes(formData.account_type);
+      const optionalNumber = (v) => (v === '' ? null : parseFloat(v));
       const data = {
         bank_name: formData.bank_name,
         account_number: formData.account_number,
         account_type: formData.account_type,
         balance: parseFloat(formData.balance),
         branch: formData.branch || null,
-        ifsc_code: formData.ifsc_code || null
+        ifsc_code: formData.ifsc_code || null,
+        interest_rate: isDeposit ? optionalNumber(formData.interest_rate) : null,
+        start_date: isDeposit ? formData.start_date || null : null,
+        maturity_date: isDeposit ? formData.maturity_date || null : null,
+        monthly_deposit: formData.account_type === 'rd' ? optionalNumber(formData.monthly_deposit) : null
       };
 
       if (editingAccount) {
@@ -122,7 +136,7 @@ export default function BankAccounts() {
       closeModal();
       fetchAccounts();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save bank account');
+      setError(errorMessage(err, 'Failed to save bank account'));
     } finally {
       setSubmitting(false);
     }
@@ -144,7 +158,7 @@ export default function BankAccounts() {
     return formatCurrencyRaw(value);
   };
 
-  const totalBalance = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const totalBalance = accounts.reduce((sum, account) => sum + account.current_value, 0);
 
   if (loading) {
     return (
@@ -221,9 +235,21 @@ export default function BankAccounts() {
                     {account.branch && (
                       <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">{account.branch}</p>
                     )}
+                    {account.days_to_maturity != null && (
+                      account.matured ? (
+                        <p className="text-xs font-medium text-red-600 dark:text-red-400 mt-1">
+                          Matured on {formatDate(account.maturity_date)} — update or renew it
+                        </p>
+                      ) : (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Matures in {account.days_to_maturity} day{account.days_to_maturity === 1 ? '' : 's'} ({formatDate(account.maturity_date)})
+                          {account.maturity_value != null && <> · {formatCurrency(account.maturity_value)}</>}
+                        </p>
+                      )
+                    )}
                   </div>
                   <div className="text-right">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(account.balance)}</p>
+                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(account.current_value)}</p>
                     {account.ifsc_code && (
                       <p className="text-xs text-gray-400 dark:text-gray-500">IFSC: {account.ifsc_code}</p>
                     )}
@@ -309,18 +335,52 @@ export default function BankAccounts() {
               </div>
 
               <div>
-                <label className="label">Balance (₹)</label>
+                <label className="label">{balanceLabel(formData.account_type)}</label>
                 <input
                   type="number"
                   className="input"
                   placeholder="0.00"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={formData.balance}
                   onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
                   required
                 />
               </div>
+
+              {DEPOSIT_TYPES.includes(formData.account_type) && (
+                <>
+                  {formData.account_type === 'rd' && (
+                    <div>
+                      <label className="label">Monthly deposit (₹)</label>
+                      <input type="number" className="input" placeholder="e.g., 5000" min="0.01" step="any"
+                        value={formData.monthly_deposit}
+                        onChange={(e) => setFormData({ ...formData, monthly_deposit: e.target.value })} />
+                    </div>
+                  )}
+                  <div>
+                    <label className="label">Interest rate (% p.a.)</label>
+                    <input type="number" className="input" placeholder="e.g., 7.1" min="0" max="100" step="any"
+                      value={formData.interest_rate}
+                      onChange={(e) => setFormData({ ...formData, interest_rate: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="label">Start date</label>
+                      <input type="date" className="input" value={formData.start_date}
+                        onChange={(e) => setFormData({ ...formData, start_date: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="label">Maturity date</label>
+                      <input type="date" className="input" value={formData.maturity_date} min={formData.start_date || undefined}
+                        onChange={(e) => setFormData({ ...formData, maturity_date: e.target.value })} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                    Interest compounds quarterly, as banks quote FD and RD rates.
+                  </p>
+                </>
+              )}
 
               <div>
                 <label className="label">Branch (Optional)</label>

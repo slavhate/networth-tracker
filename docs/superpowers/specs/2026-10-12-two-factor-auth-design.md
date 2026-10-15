@@ -128,7 +128,7 @@ Request `code` fields are limited to `max_length=64`, so a longer code gets 422.
 ## 6. Frontend
 
 ### 6.1 `api.js`
-- Response interceptor: do **not** redirect on 401 when `error.config.url` starts with `/api/auth/login`. The error propagates to the caller so it can show an inline message. This also fixes the wrong-password message being lost to a page reload.
+- Response interceptor: do **not** redirect on 401 when `error.config.url` starts with `/api/auth/login`. The error propagates to the caller so it can show an inline message. This also fixes the wrong password message being lost to a page reload.
 - `authAPI.verify2fa(mfaToken, code)` → `POST /api/auth/login/2fa`.
 - `twoFactorAPI = { status, setup, enable(password, code), disable(password, code) }`.
 

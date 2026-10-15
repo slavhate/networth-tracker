@@ -54,7 +54,7 @@
 Run the backend and frontend in two terminals. `SECRET_KEY` here is a throwaway dev value; never reuse it.
 
 ```bash
-mkdir -p /tmp/nwt-2fa && cd backend && DATA_FILE=/tmp/nwt-2fa/data.json SECRET_KEY=dev-only-secret uvicorn main:app --host 0.0.0.0 --port 8000
+mkdir -p /tmp/nwt-2fa && cd backend && DATA_FILE=/tmp/nwt-2fa/data.json SECRET_KEY="$(openssl rand -hex 32)" uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ```bash
@@ -131,8 +131,8 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def auth_headers(client):
-    client.post("/api/auth/register", json={"username": "tester", "password": "secret123", "email": "t@example.com"})
-    resp = client.post("/api/auth/login", data={"username": "tester", "password": "secret123"})
+    client.post("/api/auth/register", json={"username": "tester", "password": PASSWORD, "email": "t@example.com"})
+    resp = client.post("/api/auth/login", data={"username": "tester", "password": PASSWORD})
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 ```
 
@@ -149,7 +149,7 @@ import pyotp
 NOW = datetime(2026, 10, 12, 12, 0, 0)
 
 # Fixed secret so codes are deterministic (steps NOW_STEP-2..+2 give 5 distinct codes).
-SECRET = "JBSWY3DPEHPK3PXP"
+SECRET = pyotp.random_base32()
 
 
 def step_of(when: datetime) -> int:
@@ -722,7 +722,7 @@ import two_factor as tf
 from config import settings
 from totp_helpers import NOW, NOW_STEP, code_for, step_of, wrong_code
 
-PASSWORD = "secret123"
+PASSWORD = secrets.token_urlsafe(16)
 
 
 @pytest.fixture
@@ -763,7 +763,7 @@ def test_login_without_2fa_is_unchanged(client):
 
 
 def test_wrong_password_is_still_401(client, mfa_user):
-    resp = client.post("/api/auth/login", data={"username": "alice", "password": "wrong-pass"})
+    resp = client.post("/api/auth/login", data={"username": "alice", "password": WRONG_PASSWORD})
     assert resp.status_code == 401
 
 
@@ -1006,7 +1006,7 @@ import database as db
 import two_factor as tf
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
-PASSWORD = "secret123"  # password of the auth_headers fixture's user "tester"
+PASSWORD = secrets.token_urlsafe(16)  # password of the auth_headers fixture's user "tester"
 
 
 def enable_2fa(client, headers):
@@ -1108,7 +1108,7 @@ def test_disable_when_not_enabled_is_400(client, auth_headers, clock):
 
 def test_disable_wrong_password_is_400_and_keeps_session(client, auth_headers, clock):
     secret, _ = enable_2fa(client, auth_headers)
-    resp = disable(client, auth_headers, "wrong-pass", code_for(secret, NOW_STEP + 1))
+    resp = disable(client, auth_headers, WRONG_PASSWORD, code_for(secret, NOW_STEP + 1))
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
     # 400, not 401: the frontend logs the user out on any 401 from a non-login endpoint
@@ -1141,7 +1141,7 @@ def test_disable_with_backup_code(client, auth_headers, clock):
 def test_disable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     secret, _ = enable_2fa(client, auth_headers)
     for _ in range(5):
-        assert disable(client, auth_headers, "wrong-pass", "123456").status_code == 400
+        assert disable(client, auth_headers, WRONG_PASSWORD, "123456").status_code == 400
     assert disable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP + 1)).status_code == 429
 ```
 
@@ -1659,8 +1659,8 @@ Expected: `✓ built in ...` with no errors. `npm install` creates `frontend/pac
    python - <<'EOF'
    import httpx, pyotp
    api = "http://localhost:8000"
-   httpx.post(f"{api}/api/auth/register", json={"username": "mfademo", "password": "secret123", "email": "m@example.com"})
-   tok = httpx.post(f"{api}/api/auth/login", data={"username": "mfademo", "password": "secret123"}).json()["access_token"]
+   httpx.post(f"{api}/api/auth/register", json={"username": "mfademo", "password": PASSWORD, "email": "m@example.com"})
+   tok = httpx.post(f"{api}/api/auth/login", data={"username": "mfademo", "password": PASSWORD}).json()["access_token"]
    h = {"Authorization": f"Bearer {tok}"}
    secret = httpx.post(f"{api}/api/auth/2fa/setup", headers=h).json()["secret"]
    codes = httpx.post(f"{api}/api/auth/2fa/enable", headers=h, json={"code": pyotp.TOTP(secret).now()}).json()["backup_codes"]

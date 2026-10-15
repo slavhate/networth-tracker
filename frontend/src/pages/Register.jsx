@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { Eye, EyeOff } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
 
 export default function Register() {
   const [formData, setFormData] = useState({ 
@@ -40,7 +41,7 @@ export default function Register() {
       });
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed. Please try again.');
+      setError(errorMessage(err, 'Registration failed. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -51,9 +52,7 @@ export default function Register() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
-            <span className="text-4xl">💰</span>
-          </div>
+          <img src="/logo.png" alt="NetWorth Tracker" className="inline-block w-16 h-16 rounded-2xl shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
           <p className="text-gray-600 mt-1">Start tracking your net worth today</p>
         </div>

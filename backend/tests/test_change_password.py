@@ -3,10 +3,11 @@ from collections import Counter
 import auth
 import database as db
 from api_helpers import enable_2fa, fire_concurrently
+from credentials import PASSWORD, OTHER_PASSWORD, USERNAME, WRONG_PASSWORD
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
-OLD = "secret123"  # password of the auth_headers fixture's user "tester"
-NEW = "n3w-passw0rd"
+OLD = PASSWORD  # password of the auth_headers fixture's user (credentials.USERNAME)
+NEW = OTHER_PASSWORD
 
 
 def change(client, headers, current, new, code=None):
@@ -17,7 +18,7 @@ def change(client, headers, current, new, code=None):
 
 
 def login(client, password):
-    return client.post("/api/auth/login", data={"username": "tester", "password": password})
+    return client.post("/api/auth/login", data={"username": USERNAME, "password": password})
 
 
 def bearer(token):
@@ -45,15 +46,15 @@ def test_login_uses_the_new_password(client, auth_headers, clock):
 
 
 def test_legacy_token_without_version_is_revoked_too(client, auth_headers, clock):
-    user = db.get_user_by_username("tester")
-    legacy = bearer(auth.create_access_token({"sub": "tester", "user_id": user["id"]}))
+    user = db.get_user_by_username(USERNAME)
+    legacy = bearer(auth.create_access_token({"sub": USERNAME, "user_id": user["id"]}))
     assert change(client, auth_headers, OLD, NEW).status_code == 200
     assert client.get("/api/auth/me", headers=legacy).status_code == 401
 
 
 def test_null_token_version_is_treated_as_zero(client, auth_headers, clock):
     # data.json is hand-edited for 2FA recovery, so a null token_version is plausible.
-    user = db.get_user_by_username("tester")
+    user = db.get_user_by_username(USERNAME)
     db.update_user(user["id"], {"token_version": None})
     assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
     resp = change(client, auth_headers, OLD, NEW)
@@ -62,7 +63,7 @@ def test_null_token_version_is_treated_as_zero(client, auth_headers, clock):
 
 
 def test_wrong_current_password_is_400_and_changes_nothing(client, auth_headers, clock):
-    resp = change(client, auth_headers, "wrong-pass", NEW)
+    resp = change(client, auth_headers, WRONG_PASSWORD, NEW)
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
     assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
@@ -76,7 +77,7 @@ def test_new_password_must_differ_from_the_current_one(client, auth_headers, clo
 
 
 def test_short_new_password_is_rejected_by_validation(client, auth_headers, clock):
-    assert change(client, auth_headers, OLD, "12345").status_code == 422
+    assert change(client, auth_headers, OLD, "x" * 5).status_code == 422
     assert login(client, OLD).status_code == 200
 
 
@@ -88,7 +89,7 @@ def test_long_and_unicode_passwords_work(client, auth_headers, clock):
 
 def test_five_wrong_current_passwords_lock_the_endpoint(client, auth_headers, clock):
     for _ in range(5):
-        assert change(client, auth_headers, "wrong-pass", NEW).status_code == 400
+        assert change(client, auth_headers, WRONG_PASSWORD, NEW).status_code == 400
     locked = change(client, auth_headers, OLD, NEW)
     assert locked.status_code == 429
     assert locked.json()["detail"] == "Too many attempts. Try again in 15 minutes."
@@ -96,7 +97,7 @@ def test_five_wrong_current_passwords_lock_the_endpoint(client, auth_headers, cl
 
 
 def test_concurrent_wrong_passwords_cannot_bypass_the_lockout(client, auth_headers, clock):
-    attempt = ("/api/auth/password", auth_headers, {"current_password": "wrong-pass", "new_password": NEW})
+    attempt = ("/api/auth/password", auth_headers, {"current_password": WRONG_PASSWORD, "new_password": NEW})
     statuses = Counter(r.status_code for r in fire_concurrently([attempt] * 30))
     assert statuses == {400: 5, 429: 25}
     assert login(client, OLD).status_code == 200
@@ -108,7 +109,7 @@ def test_2fa_user_needs_a_code(client, auth_headers, clock):
         resp = change(client, auth_headers, OLD, NEW, code=missing)
         assert resp.status_code == 400
         assert resp.json()["detail"] == "Authentication code required"
-    assert db.get_user_by_username("tester").get("totp_failed_attempts", 0) == 0
+    assert db.get_user_by_username(USERNAME).get("totp_failed_attempts", 0) == 0
 
 
 def test_2fa_user_wrong_code_counts_toward_the_lockout(client, auth_headers, clock):
@@ -116,7 +117,7 @@ def test_2fa_user_wrong_code_counts_toward_the_lockout(client, auth_headers, clo
     resp = change(client, auth_headers, OLD, NEW, code=wrong_code(secret, NOW_STEP + 1))
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Invalid authentication code"
-    assert db.get_user_by_username("tester")["totp_failed_attempts"] == 1
+    assert db.get_user_by_username(USERNAME)["totp_failed_attempts"] == 1
     assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
 
 

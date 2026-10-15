@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from credentials import EMAIL, PASSWORD, USERNAME
+
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
@@ -39,8 +41,8 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def auth_headers(client):
-    client.post("/api/auth/register", json={"username": "tester", "password": "secret123", "email": "t@example.com"})
-    resp = client.post("/api/auth/login", data={"username": "tester", "password": "secret123"})
+    client.post("/api/auth/register", json={"username": USERNAME, "password": PASSWORD, "email": EMAIL})
+    resp = client.post("/api/auth/login", data={"username": USERNAME, "password": PASSWORD})
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
@@ -52,4 +54,34 @@ def clock(monkeypatch):
 
     state = {"now": NOW}
     monkeypatch.setattr(main, "_now", lambda: state["now"])
+    return state
+
+
+@pytest.fixture
+def offline_markets(monkeypatch):
+    """No network: stock prices and NAVs are unavailable and USD→INR is fixed at 80."""
+    import exchange_service
+    import nav_service
+    import stock_service
+
+    async def fixed_rate():
+        return 80.0
+
+    async def no_nav(fund_name):
+        return None
+
+    monkeypatch.setattr(exchange_service, "fetch_usd_to_inr", fixed_rate)
+    monkeypatch.setattr(nav_service, "fetch_nav_by_fund_name", no_nav)
+    monkeypatch.setattr(stock_service, "fetch_stock_price", lambda symbol, market: None)
+
+
+@pytest.fixture
+def frozen_today(monkeypatch):
+    """Freeze valuation.today(); move it by assigning frozen_today["date"]."""
+    from datetime import date
+
+    import valuation
+
+    state = {"date": date(2026, 10, 14)}
+    monkeypatch.setattr(valuation, "today", lambda: state["date"])
     return state

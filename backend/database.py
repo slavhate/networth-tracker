@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
@@ -43,11 +44,22 @@ def load_data() -> Dict[str, Any]:
         return data
 
 def save_data(data: Dict[str, Any]) -> None:
-    """Save data to JSON file"""
+    """Save data to JSON file atomically: write a temp file, then swap it into place"""
     data_file = get_data_file_path()
     os.makedirs(os.path.dirname(data_file), exist_ok=True)
-    with open(data_file, 'w') as f:
-        json.dump(data, f, indent=2)
+    tmp_file = data_file + ".tmp"
+    try:
+        with open(tmp_file, 'w') as f:
+            if os.path.exists(data_file):
+                shutil.copymode(data_file, tmp_file)  # permissions first, so the data is never readable more widely
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, data_file)
+    except BaseException:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+        raise
 
 def generate_id() -> str:
     """Generate unique ID"""
@@ -56,6 +68,82 @@ def generate_id() -> str:
 def get_timestamp() -> str:
     """Get current timestamp as ISO string"""
     return datetime.utcnow().isoformat()
+
+# Row builders shared by the create_* helpers and replace_user_data
+def _new_row(user_id: str, fields: Dict) -> Dict:
+    now = get_timestamp()
+    row = {"id": None, "user_id": None, **fields, "created_at": now, "updated_at": now}
+    # Assigned after the spread so a fields dict carrying these keys can't override them; the key order is unchanged
+    row["id"] = generate_id()
+    row["user_id"] = user_id
+    return row
+
+def _equity_numbers(quantity: float, avg_price: float, current_price: float) -> Dict:
+    """Invested amount, value and gain for a holding. The percent is 0 below one paisa invested,
+    where it would be meaningless (and can overflow to infinity)."""
+    invested = quantity * avg_price
+    current_value = quantity * current_price
+    gain_loss = current_value - invested
+    return {
+        "invested_amount": invested,
+        "current_value": current_value,
+        "gain_loss": gain_loss,
+        "gain_loss_percent": gain_loss / invested * 100 if invested >= 0.01 else 0,
+    }
+
+# Optional fields a PUT may clear by sending null; any other null in an update is ignored
+ASSET_CLEARABLE = frozenset({"description", "annual_change_rate", "valuation_date", "monthly_contribution",
+                             "interest_rate", "quantity", "unit_price", "yearly_contribution",
+                             "yearly_contribution_month", "nps_schemes", "nps_priced_through"})
+LIABILITY_CLEARABLE = frozenset({"interest_rate", "description", "emi", "balance_date", "tenure_months"})
+BANK_ACCOUNT_CLEARABLE = frozenset({"branch", "ifsc_code", "interest_rate", "start_date", "maturity_date",
+                                    "monthly_deposit"})
+MUTUAL_FUND_CLEARABLE = frozenset({"sip_amount", "sip_frequency", "sip_day", "sip_start_date", "sip_end_date",
+                                   "holdings_date", "sip_units", "sip_invested", "sip_priced_through"})
+
+def _apply_update(row: Dict, update_data: Dict, clearable: frozenset = frozenset()) -> None:
+    for key, value in update_data.items():
+        if value is not None or key in clearable:
+            row[key] = value
+    row["updated_at"] = get_timestamp()
+
+def _new_equity_row(user_id: str, equity_data: Dict) -> Dict:
+    quantity = equity_data["quantity"]
+    avg_price = equity_data["avg_buy_price"]
+    current_price = equity_data.get("current_price")
+    if current_price is None:
+        current_price = avg_price
+    return _new_row(user_id, {
+        "symbol": equity_data["symbol"].upper(),
+        "company_name": equity_data.get("company_name"),
+        "market": equity_data["market"],
+        "quantity": quantity,
+        "avg_buy_price": avg_price,
+        "current_price": current_price,
+        **_equity_numbers(quantity, avg_price, current_price),
+        "notes": equity_data.get("notes"),
+    })
+
+# Breakdown maps a snapshot may carry (newer snapshots); older ones have only the totals
+SNAPSHOT_BREAKDOWN = ("assets_by_category", "liabilities_by_category", "assets_by_class")
+
+def _new_snapshot_row(user_id: str, total_assets: float, total_liabilities: float, timestamp: str,
+                      breakdown: Optional[Dict] = None) -> Dict:
+    return {
+        "id": generate_id(),
+        "user_id": user_id,
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "net_worth": total_assets - total_liabilities,
+        "timestamp": timestamp,
+        **{key: breakdown[key] for key in SNAPSHOT_BREAKDOWN if breakdown and breakdown.get(key) is not None},
+    }
+
+def _new_goal_row(user_id: str, goal_data: Dict) -> Dict:
+    return _new_row(user_id, {
+        "target_amount": goal_data.get("target_amount", 100000000),  # Default 10 crore
+        "name": goal_data.get("name", "Net Worth Goal"),
+    })
 
 # User operations
 def get_user_by_username(username: str) -> Optional[Dict]:
@@ -109,13 +197,7 @@ def get_asset_by_id(asset_id: str, user_id: str) -> Optional[Dict]:
 
 def create_asset(user_id: str, asset_data: Dict) -> Dict:
     data = load_data()
-    asset = {
-        "id": generate_id(),
-        "user_id": user_id,
-        **asset_data,
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    asset = _new_row(user_id, asset_data)
     data["assets"].append(asset)
     save_data(data)
     return asset
@@ -124,10 +206,7 @@ def update_asset(asset_id: str, user_id: str, update_data: Dict) -> Optional[Dic
     data = load_data()
     for i, asset in enumerate(data["assets"]):
         if asset["id"] == asset_id and asset["user_id"] == user_id:
-            for key, value in update_data.items():
-                if value is not None:
-                    data["assets"][i][key] = value
-            data["assets"][i]["updated_at"] = get_timestamp()
+            _apply_update(data["assets"][i], update_data, ASSET_CLEARABLE)
             save_data(data)
             return data["assets"][i]
     return None
@@ -155,13 +234,7 @@ def get_liability_by_id(liability_id: str, user_id: str) -> Optional[Dict]:
 
 def create_liability(user_id: str, liability_data: Dict) -> Dict:
     data = load_data()
-    liability = {
-        "id": generate_id(),
-        "user_id": user_id,
-        **liability_data,
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    liability = _new_row(user_id, liability_data)
     data["liabilities"].append(liability)
     save_data(data)
     return liability
@@ -170,10 +243,7 @@ def update_liability(liability_id: str, user_id: str, update_data: Dict) -> Opti
     data = load_data()
     for i, liability in enumerate(data["liabilities"]):
         if liability["id"] == liability_id and liability["user_id"] == user_id:
-            for key, value in update_data.items():
-                if value is not None:
-                    data["liabilities"][i][key] = value
-            data["liabilities"][i]["updated_at"] = get_timestamp()
+            _apply_update(data["liabilities"][i], update_data, LIABILITY_CLEARABLE)
             save_data(data)
             return data["liabilities"][i]
     return None
@@ -188,22 +258,18 @@ def delete_liability(liability_id: str, user_id: str) -> bool:
     return False
 
 # Snapshot operations
-def get_snapshots_by_user(user_id: str, limit: int = 30) -> List[Dict]:
+def get_snapshots_by_user(user_id: str, limit: Optional[int] = 30) -> List[Dict]:
+    """Newest first; limit=None returns every snapshot"""
     data = load_data()
     snapshots = [s for s in data["snapshots"] if s["user_id"] == user_id]
     snapshots.sort(key=lambda x: x["timestamp"], reverse=True)
-    return snapshots[:limit]
+    return snapshots if limit is None else snapshots[:limit]
 
-def create_snapshot(user_id: str, total_assets: float, total_liabilities: float) -> Dict:
+def create_snapshot(user_id: str, total_assets: float, total_liabilities: float,
+                    breakdown: Optional[Dict] = None, timestamp: Optional[str] = None) -> Dict:
     data = load_data()
-    snapshot = {
-        "id": generate_id(),
-        "user_id": user_id,
-        "total_assets": total_assets,
-        "total_liabilities": total_liabilities,
-        "net_worth": total_assets - total_liabilities,
-        "timestamp": get_timestamp()
-    }
+    # The local clock, like the month check in main.py (the other stamps stay UTC)
+    snapshot = _new_snapshot_row(user_id, total_assets, total_liabilities, timestamp or datetime.now().isoformat(), breakdown)
     data["snapshots"].append(snapshot)
     save_data(data)
     return snapshot
@@ -222,13 +288,7 @@ def get_bank_account_by_id(account_id: str, user_id: str) -> Optional[Dict]:
 
 def create_bank_account(user_id: str, account_data: Dict) -> Dict:
     data = load_data()
-    account = {
-        "id": generate_id(),
-        "user_id": user_id,
-        **account_data,
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    account = _new_row(user_id, account_data)
     data["bank_accounts"].append(account)
     save_data(data)
     return account
@@ -237,10 +297,7 @@ def update_bank_account(account_id: str, user_id: str, update_data: Dict) -> Opt
     data = load_data()
     for i, account in enumerate(data["bank_accounts"]):
         if account["id"] == account_id and account["user_id"] == user_id:
-            for key, value in update_data.items():
-                if value is not None:
-                    data["bank_accounts"][i][key] = value
-            data["bank_accounts"][i]["updated_at"] = get_timestamp()
+            _apply_update(data["bank_accounts"][i], update_data, BANK_ACCOUNT_CLEARABLE)
             save_data(data)
             return data["bank_accounts"][i]
     return None
@@ -268,13 +325,7 @@ def get_insurance_by_id(insurance_id: str, user_id: str) -> Optional[Dict]:
 
 def create_insurance(user_id: str, insurance_data: Dict) -> Dict:
     data = load_data()
-    insurance = {
-        "id": generate_id(),
-        "user_id": user_id,
-        **insurance_data,
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    insurance = _new_row(user_id, insurance_data)
     data["insurances"].append(insurance)
     save_data(data)
     return insurance
@@ -314,13 +365,7 @@ def get_mutual_fund_by_id(fund_id: str, user_id: str) -> Optional[Dict]:
 
 def create_mutual_fund(user_id: str, fund_data: Dict) -> Dict:
     data = load_data()
-    fund = {
-        "id": generate_id(),
-        "user_id": user_id,
-        **fund_data,
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    fund = _new_row(user_id, fund_data)
     data["mutual_funds"].append(fund)
     save_data(data)
     return fund
@@ -329,10 +374,7 @@ def update_mutual_fund(fund_id: str, user_id: str, update_data: Dict) -> Optiona
     data = load_data()
     for i, fund in enumerate(data["mutual_funds"]):
         if fund["id"] == fund_id and fund["user_id"] == user_id:
-            for key, value in update_data.items():
-                if value is not None:
-                    data["mutual_funds"][i][key] = value
-            data["mutual_funds"][i]["updated_at"] = get_timestamp()
+            _apply_update(data["mutual_funds"][i], update_data, MUTUAL_FUND_CLEARABLE)
             save_data(data)
             return data["mutual_funds"][i]
     return None
@@ -360,29 +402,7 @@ def get_equity_by_id(equity_id: str, user_id: str) -> Optional[Dict]:
 
 def create_equity(user_id: str, equity_data: Dict) -> Dict:
     data = load_data()
-    invested = equity_data["quantity"] * equity_data["avg_buy_price"]
-    current_price = equity_data.get("current_price", equity_data["avg_buy_price"])
-    current_value = equity_data["quantity"] * current_price
-    gain_loss = current_value - invested
-    gain_loss_percent = (gain_loss / invested * 100) if invested > 0 else 0
-    
-    equity = {
-        "id": generate_id(),
-        "user_id": user_id,
-        "symbol": equity_data["symbol"].upper(),
-        "company_name": equity_data.get("company_name"),
-        "market": equity_data["market"],
-        "quantity": equity_data["quantity"],
-        "avg_buy_price": equity_data["avg_buy_price"],
-        "current_price": current_price,
-        "invested_amount": invested,
-        "current_value": current_value,
-        "gain_loss": gain_loss,
-        "gain_loss_percent": gain_loss_percent,
-        "notes": equity_data.get("notes"),
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    equity = _new_equity_row(user_id, equity_data)
     data["equities"].append(equity)
     save_data(data)
     return equity
@@ -394,17 +414,12 @@ def update_equity(equity_id: str, user_id: str, update_data: Dict) -> Optional[D
             for key, value in update_data.items():
                 if value is not None:
                     data["equities"][i][key] = value
-            # Recalculate values
-            qty = data["equities"][i]["quantity"]
-            avg_price = data["equities"][i]["avg_buy_price"]
-            current_price = data["equities"][i].get("current_price", avg_price)
-            invested = qty * avg_price
-            current_value = qty * current_price
-            data["equities"][i]["invested_amount"] = invested
-            data["equities"][i]["current_value"] = current_value
-            data["equities"][i]["gain_loss"] = current_value - invested
-            data["equities"][i]["gain_loss_percent"] = ((current_value - invested) / invested * 100) if invested > 0 else 0
-            data["equities"][i]["updated_at"] = get_timestamp()
+            row = data["equities"][i]
+            current_price = row.get("current_price")
+            if current_price is None:
+                current_price = row["avg_buy_price"]
+            row.update(_equity_numbers(row["quantity"], row["avg_buy_price"], current_price))
+            row["updated_at"] = get_timestamp()
             save_data(data)
             return data["equities"][i]
     return None
@@ -414,14 +429,8 @@ def update_equity_price(equity_id: str, user_id: str, current_price: float) -> O
     data = load_data()
     for i, equity in enumerate(data["equities"]):
         if equity["id"] == equity_id and equity["user_id"] == user_id:
-            qty = equity["quantity"]
-            avg_price = equity["avg_buy_price"]
-            invested = qty * avg_price
-            current_value = qty * current_price
             data["equities"][i]["current_price"] = current_price
-            data["equities"][i]["current_value"] = current_value
-            data["equities"][i]["gain_loss"] = current_value - invested
-            data["equities"][i]["gain_loss_percent"] = ((current_value - invested) / invested * 100) if invested > 0 else 0
+            data["equities"][i].update(_equity_numbers(equity["quantity"], equity["avg_buy_price"], current_price))
             data["equities"][i]["updated_at"] = get_timestamp()
             save_data(data)
             return data["equities"][i]
@@ -461,14 +470,7 @@ def create_or_update_goal(user_id: str, goal_data: Dict) -> Dict:
             return data["goals"][i]
     
     # Create new goal
-    goal = {
-        "id": generate_id(),
-        "user_id": user_id,
-        "target_amount": goal_data.get("target_amount", 100000000),  # Default 10 crore
-        "name": goal_data.get("name", "Net Worth Goal"),
-        "created_at": get_timestamp(),
-        "updated_at": get_timestamp()
-    }
+    goal = _new_goal_row(user_id, goal_data)
     data["goals"].append(goal)
     save_data(data)
     return goal
@@ -481,3 +483,22 @@ def delete_goal(user_id: str) -> bool:
         save_data(data)
         return True
     return False
+
+# Restore
+def replace_user_data(user_id: str, cleaned: Dict) -> None:
+    """Replace all of a user's financial data (items, snapshots, goal) with `cleaned`, in a single save"""
+    data = load_data()
+    for collection in ("assets", "liabilities", "bank_accounts", "insurances",
+                       "mutual_funds", "equities", "snapshots", "goals"):
+        data[collection] = [row for row in data[collection] if row["user_id"] != user_id]
+
+    for collection in ("assets", "liabilities", "bank_accounts", "insurances", "mutual_funds"):
+        data[collection].extend(_new_row(user_id, item) for item in cleaned[collection])
+    data["equities"].extend(_new_equity_row(user_id, item) for item in cleaned["equities"])
+    data["snapshots"].extend(
+        _new_snapshot_row(user_id, s["total_assets"], s["total_liabilities"], s["timestamp"], s)
+        for s in cleaned["snapshots"]
+    )
+    if cleaned["goal"] is not None:
+        data["goals"].append(_new_goal_row(user_id, cleaned["goal"]))
+    save_data(data)

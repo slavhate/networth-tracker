@@ -3,13 +3,14 @@ from collections import Counter
 import database as db
 import two_factor as tf
 from api_helpers import enable_2fa, fire_concurrently
+from credentials import PASSWORD, USERNAME, WRONG_PASSWORD
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
-PASSWORD = "secret123"  # password of the auth_headers fixture's user "tester"
+# PASSWORD is the password of the auth_headers fixture's user (credentials.USERNAME)
 
 
 def password_login(client):
-    return client.post("/api/auth/login", data={"username": "tester", "password": PASSWORD}).json()
+    return client.post("/api/auth/login", data={"username": USERNAME, "password": PASSWORD}).json()
 
 
 def disable(client, headers, password, code):
@@ -37,8 +38,8 @@ def test_setup_issues_pending_secret_without_enabling(client, auth_headers):
     resp = client.post("/api/auth/2fa/setup", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["otpauth_uri"] == tf.provisioning_uri(body["secret"], "tester")
-    user = db.get_user_by_username("tester")
+    assert body["otpauth_uri"] == tf.provisioning_uri(body["secret"], USERNAME)
+    user = db.get_user_by_username(USERNAME)
     assert user["totp_pending_secret"] == body["secret"]
     assert not user.get("totp_enabled")
     assert "access_token" in password_login(client)
@@ -48,7 +49,7 @@ def test_setup_again_replaces_pending_secret(client, auth_headers):
     first = client.post("/api/auth/2fa/setup", headers=auth_headers).json()["secret"]
     second = client.post("/api/auth/2fa/setup", headers=auth_headers).json()["secret"]
     assert first != second
-    assert db.get_user_by_username("tester")["totp_pending_secret"] == second
+    assert db.get_user_by_username(USERNAME)["totp_pending_secret"] == second
 
 
 def test_enable_requires_setup_first(client, auth_headers, clock):
@@ -64,7 +65,7 @@ def test_enable_with_wrong_code_is_400_and_stays_disabled(client, auth_headers, 
     assert resp.json()["detail"] == "Invalid authentication code"
     assert client.get("/api/auth/2fa/status", headers=auth_headers).json()["enabled"] is False
     # A wrong enrollment code is not a guessing attack on the account, so it isn't counted.
-    assert db.get_user_by_username("tester").get("totp_failed_attempts", 0) == 0
+    assert db.get_user_by_username(USERNAME).get("totp_failed_attempts", 0) == 0
 
 
 def test_enable_requires_the_password(client, auth_headers, clock):
@@ -76,25 +77,25 @@ def test_enable_requires_the_password(client, auth_headers, clock):
 
 def test_enable_with_wrong_password_is_400_and_counted(client, auth_headers, clock):
     secret = start_setup(client, auth_headers)
-    resp = enable(client, auth_headers, "wrong-pass", code_for(secret, NOW_STEP))
+    resp = enable(client, auth_headers, WRONG_PASSWORD, code_for(secret, NOW_STEP))
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
-    assert db.get_user_by_username("tester")["totp_failed_attempts"] == 1
+    assert db.get_user_by_username(USERNAME)["totp_failed_attempts"] == 1
     assert client.get("/api/auth/2fa/status", headers=auth_headers).json()["enabled"] is False
 
 
 def test_enable_checks_the_password_before_the_code(client, auth_headers, clock):
     secret = start_setup(client, auth_headers)
-    resp = enable(client, auth_headers, "wrong-pass", wrong_code(secret, NOW_STEP))
+    resp = enable(client, auth_headers, WRONG_PASSWORD, wrong_code(secret, NOW_STEP))
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
-    assert db.get_user_by_username("tester")["totp_failed_attempts"] == 1
+    assert db.get_user_by_username(USERNAME)["totp_failed_attempts"] == 1
 
 
 def test_enable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     secret = start_setup(client, auth_headers)
     for _ in range(5):
-        assert enable(client, auth_headers, "wrong-pass", code_for(secret, NOW_STEP)).status_code == 400
+        assert enable(client, auth_headers, WRONG_PASSWORD, code_for(secret, NOW_STEP)).status_code == 400
     locked = enable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP))
     assert locked.status_code == 429
     assert locked.json()["detail"] == "Too many attempts. Try again in 15 minutes."
@@ -103,7 +104,7 @@ def test_enable_locks_after_five_wrong_passwords(client, auth_headers, clock):
 
 def test_concurrent_wrong_passwords_at_enable_cannot_bypass_the_lockout(client, auth_headers, clock):
     secret = start_setup(client, auth_headers)
-    attempt = ("/api/auth/2fa/enable", auth_headers, {"password": "wrong-pass", "code": code_for(secret, NOW_STEP)})
+    attempt = ("/api/auth/2fa/enable", auth_headers, {"password": WRONG_PASSWORD, "code": code_for(secret, NOW_STEP)})
     statuses = Counter(r.status_code for r in fire_concurrently([attempt] * 30))
     assert statuses == {400: 5, 429: 25}
     assert client.get("/api/auth/2fa/status", headers=auth_headers).json()["enabled"] is False
@@ -114,7 +115,7 @@ def test_enable_returns_backup_codes_and_turns_on_2fa(client, auth_headers, cloc
     assert len(codes) == 10
     status = client.get("/api/auth/2fa/status", headers=auth_headers).json()
     assert status == {"enabled": True, "backup_codes_remaining": 10}
-    user = db.get_user_by_username("tester")
+    user = db.get_user_by_username(USERNAME)
     assert user["totp_secret"] == secret
     assert user["totp_pending_secret"] is None
     assert codes[0] not in str(user)  # only hashes are stored
@@ -151,7 +152,7 @@ def test_disable_when_not_enabled_is_400(client, auth_headers, clock):
 
 def test_disable_wrong_password_is_400_and_keeps_session(client, auth_headers, clock):
     secret, _ = enable_2fa(client, auth_headers)
-    resp = disable(client, auth_headers, "wrong-pass", code_for(secret, NOW_STEP + 1))
+    resp = disable(client, auth_headers, WRONG_PASSWORD, code_for(secret, NOW_STEP + 1))
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
     # 400, not 401: the frontend logs the user out on any 401 from a non-login endpoint
@@ -168,7 +169,7 @@ def test_disable_wrong_code_is_400(client, auth_headers, clock):
 def test_disable_clears_everything_and_restores_plain_login(client, auth_headers, clock):
     secret, _ = enable_2fa(client, auth_headers)
     assert disable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP + 1)).status_code == 204
-    user = db.get_user_by_username("tester")
+    user = db.get_user_by_username(USERNAME)
     for field, default in tf.DISABLED_FIELDS.items():
         assert user[field] == default
     status = client.get("/api/auth/2fa/status", headers=auth_headers).json()
@@ -184,7 +185,7 @@ def test_disable_with_backup_code(client, auth_headers, clock):
 def test_disable_locks_after_five_wrong_passwords(client, auth_headers, clock):
     secret, _ = enable_2fa(client, auth_headers)
     for _ in range(5):
-        assert disable(client, auth_headers, "wrong-pass", "123456").status_code == 400
+        assert disable(client, auth_headers, WRONG_PASSWORD, "123456").status_code == 400
     assert disable(client, auth_headers, PASSWORD, code_for(secret, NOW_STEP + 1)).status_code == 429
 
 

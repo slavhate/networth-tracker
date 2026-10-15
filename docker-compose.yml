@@ -10,9 +10,11 @@ services:
       - ./data:/app/data
     environment:
       # Generate a strong key: python -c "import secrets; print(secrets.token_hex(32))"
-      # - SECRET_KEY=your-generated-key-here
+      # - SECRET_KEY=   # optional; generate one with: openssl rand -hex 32
       - CREATE_DEMO_DATA=true
+      # - DEMO_PASSWORD=   # optional; if unset, a random password is printed in the backend log
       - DATA_FILE=/app/data/data.json
+      # - TZ=IST-5:30   # optional: use Indian time for "today" (POSIX form works without tzdata)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { publishWarnings } from './utils/notices';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -18,10 +19,26 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle auth errors
+// Warnings about unreachable price or NAV sources come back in the X-Warnings header (a JSON array).
+const surfaceWarnings = (response) => {
+  const raw = response?.headers?.['x-warnings'];
+  if (!raw) return;
+  try {
+    const messages = JSON.parse(raw);
+    if (Array.isArray(messages)) publishWarnings(messages.filter((m) => typeof m === 'string' && m.trim()));
+  } catch {
+    // a malformed header is ignored
+  }
+};
+
+// Surface warning headers, and handle auth errors
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    surfaceWarnings(response);
+    return response;
+  },
   (error) => {
+    surfaceWarnings(error.response);
     // Login endpoints use 401 for bad credentials/codes; let the form show those inline.
     const isLoginRequest = error.config?.url?.startsWith('/api/auth/login');
     const sentAuth = error.config?.headers?.Authorization;
@@ -68,6 +85,12 @@ export const assetsAPI = {
   create: (data) => api.post('/api/assets', data),
   update: (id, data) => api.put(`/api/assets/${id}`, data),
   delete: (id) => api.delete(`/api/assets/${id}`),
+  refreshNav: (id) => api.post(`/api/assets/${id}/refresh-nav`),
+};
+
+// NPS API
+export const npsAPI = {
+  schemes: () => api.get('/api/nps/schemes'),
 };
 
 // Liabilities API
@@ -77,6 +100,7 @@ export const liabilitiesAPI = {
   create: (data) => api.post('/api/liabilities', data),
   update: (id, data) => api.put(`/api/liabilities/${id}`, data),
   delete: (id) => api.delete(`/api/liabilities/${id}`),
+  schedule: (id) => api.get(`/api/liabilities/${id}/schedule`),
 };
 
 // Bank Accounts API
@@ -129,6 +153,12 @@ export const dashboardAPI = {
   createSnapshot: () => api.post('/api/snapshot'),
 };
 
+// Snapshot Settings API (how often the dashboard saves an automatic snapshot)
+export const snapshotSettingsAPI = {
+  get: () => api.get('/api/settings/snapshots'),
+  update: (frequency) => api.put('/api/settings/snapshots', { frequency }),
+};
+
 // Exchange Rate API
 export const exchangeAPI = {
   getRate: () => api.get('/api/exchange-rate'),
@@ -142,13 +172,13 @@ export const goalAPI = {
   delete: () => api.delete('/api/goal'),
 };
 
-// Export API
+// Backup & Restore API
 export const exportAPI = {
   download: () => api.get('/api/export'),
-  import: (file) => {
+  restore: (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    return api.post('/api/import', formData, {
+    return api.post('/api/restore', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
   }

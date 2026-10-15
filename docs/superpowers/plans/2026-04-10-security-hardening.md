@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python/FastAPI, React/Vite, Nginx, Docker, docker-compose
 
-**Project root:** `c:/Users/slavhate/networth-tracker`
+**Project root:** `<repo>`
 
 **Note:** This project may not have git initialized. Skip commit steps if `git status` fails.
 
@@ -66,7 +66,7 @@ Key changes:
 
 Run from `backend/` directory:
 ```bash
-cd c:/Users/slavhate/networth-tracker/backend && python -c "from config import settings; print('SECRET_KEY length:', len(settings.SECRET_KEY)); print('CREATE_DEMO_DATA:', settings.CREATE_DEMO_DATA)"
+cd <repo>/backend && python -c "from config import settings; print('SECRET_KEY length:', len(settings.SECRET_KEY)); print('CREATE_DEMO_DATA:', settings.CREATE_DEMO_DATA)"
 ```
 
 Expected output:
@@ -367,7 +367,7 @@ services:
       - ./data:/app/data
     environment:
       # Generate a strong key: python -c "import secrets; print(secrets.token_hex(32))"
-      # - SECRET_KEY=your-generated-key-here
+      # - SECRET_KEY=${SECRET_KEY}   # read from your shell or a .env file next to docker-compose.yml
       - CREATE_DEMO_DATA=true
       - DATA_FILE=/app/data/data.json
     restart: unless-stopped
@@ -415,7 +415,7 @@ Changes from original:
 - [ ] **Step 1: Stop any existing containers**
 
 ```bash
-cd /mnt/c/Users/slavhate/networth-tracker && docker compose down
+cd /mnt/c/<path-to>/networth-tracker && docker compose down
 ```
 
 - [ ] **Step 2: Rebuild and start**
@@ -453,7 +453,7 @@ Expected: all 5 security headers present.
 - [ ] **Step 6: Verify demo login works**
 
 ```bash
-curl -s -X POST http://localhost:3000/api/auth/login -H "Content-Type: application/x-www-form-urlencoded" -d "username=demo&password=password123"
+curl -s -X POST http://localhost:3000/api/auth/login -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "username=demo" --data-urlencode "password=$DEMO_PASSWORD"
 ```
 
 Expected: JSON with `access_token` (since `CREATE_DEMO_DATA=true` in docker-compose).
@@ -479,7 +479,7 @@ docker compose down
 - [ ] **Step 1: Build backend image**
 
 ```bash
-cd /mnt/c/Users/slavhate/networth-tracker && docker build -t shri32msi/network-tracker:backend ./backend
+cd /mnt/c/<path-to>/networth-tracker && docker build -t shri32msi/network-tracker:backend ./backend
 ```
 
 Expected: successful build.

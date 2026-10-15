@@ -4,13 +4,14 @@ import asyncio
 import httpx
 
 import main
+from credentials import PASSWORD
 from totp_helpers import NOW_STEP, code_for
 
 
-def enable_2fa(client, headers, password="secret123"):
+def enable_2fa(client, headers, password=PASSWORD):
     """Run setup + enable at NOW_STEP. Later TOTP uses must be NOW_STEP + 1 (replay protection).
 
-    The default password is that of the auth_headers fixture's user "tester".
+    The default password is that of the auth_headers fixture's user (credentials.USERNAME).
     """
     setup = client.post("/api/auth/2fa/setup", headers=headers).json()
     body = {"password": password, "code": code_for(setup["secret"], NOW_STEP)}

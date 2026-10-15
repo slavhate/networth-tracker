@@ -32,7 +32,7 @@
   - A stale or unknown token gets the existing 401 `"Could not validate credentials"`. A stale 2FA challenge gets 401 `"Invalid or expired login session"`.
 - **Validation:** `new_password` at least 6 characters (422); `code` at most 64 characters (422).
 - **Commits:**
-  - Pass the author identity on every commit, because no git identity is configured and GitHub blocks pushes that expose a private email: `git -c user.name="Shrikant Lavhate" -c user.email="77775269+slavhate@users.noreply.github.com" commit ...`
+  - Commit with the repository's configured no-reply identity.
   - Every message ends with a blank line, then `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Style:** follow existing patterns. Backend uses module-level functions, `db.` helpers and `HTTPException`. Frontend uses Tailwind component classes (`card`, `input`, `label`, `btn-primary`) with `dark:` variants.
 
@@ -42,7 +42,7 @@
 2. **Long (>72-byte) and non-ASCII passwords.** bcrypt truncates at 72 bytes. Changing to such a password must work and must allow login afterwards, with no 500. Covered in Task 2 (`test_long_and_unicode_passwords_work`).
 3. **A 2FA user sends an empty code (`""`) rather than none.** That must be treated as missing (400 "Authentication code required") and must not count toward the lockout. Covered in Task 2.
 4. **"Other sessions" means other browsers.** Tabs of one origin share `localStorage`, so they pick up the new token; that's expected. The manual check must use a second *origin* (`127.0.0.1` vs `localhost`) or an API token. Covered in Task 3's manual check.
-5. **Parallel wrong-password guesses on the new endpoint** must not get past the 5-attempt lockout. Covered in Task 2 (`test_concurrent_wrong_passwords_cannot_bypass_the_lockout`).
+5. **Parallel wrong password guesses on the new endpoint** must not get past the 5-attempt lockout. Covered in Task 2 (`test_concurrent_wrong_passwords_cannot_bypass_the_lockout`).
 
 ---
 
@@ -108,7 +108,7 @@ def test_token_with_stale_version_is_rejected(client, auth_headers):
     user = db.get_user_by_username("tester")
     db.update_user(user["id"], {"token_version": 1})
     assert client.get("/api/auth/me", headers=auth_headers).status_code == 401
-    fresh = client.post("/api/auth/login", data={"username": "tester", "password": "secret123"}).json()["access_token"]
+    fresh = client.post("/api/auth/login", data={"username": "tester", "password": PASSWORD}).json()["access_token"]
     assert auth.decode_access_token(fresh)["ver"] == 1
     assert me(client, fresh).status_code == 200
 
@@ -125,11 +125,11 @@ def test_token_for_unknown_user_is_rejected(client):
 
 
 def test_mfa_challenge_with_stale_version_cannot_complete_login(client, clock):
-    client.post("/api/auth/register", json={"username": "alice", "password": "secret123", "email": "a@example.com"})
+    client.post("/api/auth/register", json={"username": "alice", "password": PASSWORD, "email": "a@example.com"})
     user = db.get_user_by_username("alice")
     secret = tf.generate_secret()
     db.update_user(user["id"], {"totp_enabled": True, "totp_secret": secret})
-    mfa_token = client.post("/api/auth/login", data={"username": "alice", "password": "secret123"}).json()["mfa_token"]
+    mfa_token = client.post("/api/auth/login", data={"username": "alice", "password": PASSWORD}).json()["mfa_token"]
     db.update_user(user["id"], {"token_version": 1})
     resp = client.post("/api/auth/login/2fa", json={"mfa_token": mfa_token, "code": code_for(secret, NOW_STEP)})
     assert resp.status_code == 401
@@ -230,7 +230,7 @@ Expected: 71 passed (63 existing + 8 new). There should be no new warning types;
 
 ```bash
 git add backend/auth.py backend/main.py backend/tests/test_auth_tokens.py backend/tests/test_token_version.py
-git -c user.name="Shrikant Lavhate" -c user.email="77775269+slavhate@users.noreply.github.com" commit -m "feat: version access tokens so they can be revoked" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat: version access tokens so they can be revoked" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -305,8 +305,8 @@ import database as db
 from api_helpers import enable_2fa, fire_concurrently
 from totp_helpers import NOW_STEP, code_for, wrong_code
 
-OLD = "secret123"  # password of the auth_headers fixture's user "tester"
-NEW = "n3w-passw0rd"
+OLD = PASSWORD  # password of the auth_headers fixture's user "tester"
+NEW = OTHER_PASSWORD
 
 
 def change(client, headers, current, new, code=None):
@@ -352,7 +352,7 @@ def test_legacy_token_without_version_is_revoked_too(client, auth_headers, clock
 
 
 def test_wrong_current_password_is_400_and_changes_nothing(client, auth_headers, clock):
-    resp = change(client, auth_headers, "wrong-pass", NEW)
+    resp = change(client, auth_headers, WRONG_PASSWORD, NEW)
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Incorrect password"
     assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
@@ -378,7 +378,7 @@ def test_long_and_unicode_passwords_work(client, auth_headers, clock):
 
 def test_five_wrong_current_passwords_lock_the_endpoint(client, auth_headers, clock):
     for _ in range(5):
-        assert change(client, auth_headers, "wrong-pass", NEW).status_code == 400
+        assert change(client, auth_headers, WRONG_PASSWORD, NEW).status_code == 400
     locked = change(client, auth_headers, OLD, NEW)
     assert locked.status_code == 429
     assert locked.json()["detail"] == "Too many attempts. Try again in 15 minutes."
@@ -386,7 +386,7 @@ def test_five_wrong_current_passwords_lock_the_endpoint(client, auth_headers, cl
 
 
 def test_concurrent_wrong_passwords_cannot_bypass_the_lockout(client, auth_headers, clock):
-    attempt = ("/api/auth/password", auth_headers, {"current_password": "wrong-pass", "new_password": NEW})
+    attempt = ("/api/auth/password", auth_headers, {"current_password": WRONG_PASSWORD, "new_password": NEW})
     statuses = Counter(r.status_code for r in fire_concurrently([attempt] * 30))
     assert statuses == {400: 5, 429: 25}
     assert login(client, OLD).status_code == 200
@@ -521,7 +521,7 @@ In `README.md`'s `### Authentication` table, after the `/api/auth/2fa/disable` r
 
 ```bash
 git add backend/tests/api_helpers.py backend/tests/test_two_factor_manage.py backend/models.py backend/main.py backend/tests/test_change_password.py README.md
-git -c user.name="Shrikant Lavhate" -c user.email="77775269+slavhate@users.noreply.github.com" commit -m "feat: add change-password endpoint that signs out other sessions" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat: add change-password endpoint that signs out other sessions" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -763,7 +763,7 @@ Expected: `✓ built in ...` with no errors. `npm install` may create an untrack
 Start the backend and frontend:
 
 ```bash
-mkdir -p /tmp/nwt-pw && cd backend && DATA_FILE=/tmp/nwt-pw/data.json SECRET_KEY=dev-only-secret uvicorn main:app --host 0.0.0.0 --port 8000
+mkdir -p /tmp/nwt-pw && cd backend && DATA_FILE=/tmp/nwt-pw/data.json SECRET_KEY="$(openssl rand -hex 32)" uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ```bash
@@ -771,7 +771,7 @@ cd frontend && npm run dev
 ```
 
 Check:
-1. Register `pwuser` / `secret123`. Security shows the "Change password" card above the 2FA card, with no code field.
+1. Register `pwuser` with a password of your choice. Security shows the "Change password" card above the 2FA card, with no code field.
 2. Client-side checks show inline, and nothing is sent:
    - new password of 5 characters;
    - mismatched confirmation;
@@ -786,5 +786,5 @@ Check:
 
 ```bash
 git add frontend/src/utils/errors.js frontend/src/components/ChangePasswordCard.jsx frontend/src/api.js frontend/src/AuthContext.jsx frontend/src/pages/Security.jsx README.md
-git -c user.name="Shrikant Lavhate" -c user.email="77775269+slavhate@users.noreply.github.com" commit -m "feat: add change-password card to the Security page" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat: add change-password card to the Security page" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```

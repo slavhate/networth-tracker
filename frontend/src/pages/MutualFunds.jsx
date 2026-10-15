@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { mutualFundsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
@@ -17,6 +17,8 @@ import {
   RefreshCw,
   Info
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
+import { todayIso, formatDate } from '../utils/dates';
 
 const FUND_CATEGORIES = [
   { value: 'equity', label: 'Equity', icon: TrendingUp, color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
@@ -44,6 +46,33 @@ const formatPercent = (value) => {
   return `${sign}${value.toFixed(2)}%`;
 };
 
+// A SIP amount keeps its paise (₹2,500.50); whole rupees show without decimals
+const formatSipAmount = (value) => {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value);
+};
+
+const emptyForm = () => ({
+  fund_name: '',
+  amc: '',
+  category: 'equity',
+  invested_amount: '',
+  current_value: '',
+  units: '',
+  current_nav: '',
+  folio_number: '',
+  sip_amount: '',
+  sip_frequency: 'monthly',
+  sip_day: '',
+  sip_start_date: '',
+  sip_end_date: '',
+  holdings_date: todayIso()
+});
+
 export default function MutualFunds() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
   const [funds, setFunds] = useState([]);
@@ -51,18 +80,15 @@ export default function MutualFunds() {
   const [refreshing, setRefreshing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingFund, setEditingFund] = useState(null);
-  const [formData, setFormData] = useState({
-    fund_name: '',
-    amc: '',
-    category: 'equity',
-    invested_amount: '',
-    current_value: '',
-    units: '',
-    current_nav: '',
-    folio_number: ''
-  });
+  const [formData, setFormData] = useState(emptyForm);
+  // The API's current value for a SIP fund includes its installments, so an edit sends it only once the user types one;
+  // otherwise it is left out and the stored value stands. (A change to the SIP's amount, frequency or day is applied
+  // from today by the server, which folds the installments so far into the units and invested amount.)
+  const [currentValueTouched, setCurrentValueTouched] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const backgroundRefresh = useRef(false);
+  const openFundId = useRef(null); // the fund the edit form is open on, read by the background refresh
 
   const fetchFunds = async (refresh = false) => {
     try {
@@ -70,12 +96,39 @@ export default function MutualFunds() {
       else setLoading(true);
       const response = await mutualFundsAPI.getAll(refresh);
       setFunds(response.data);
+      if (!refresh) refreshStaleSips(response.data);
       updateLastUpdated();
     } catch (err) {
       setError('Failed to load mutual funds');
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  // SIP funds not priced today are refreshed one at a time after the list loads, so their installments count at the
+  // NAV of their day; failures are quiet and the card keeps what it showed. A response is dropped while the edit form
+  // is open on that fund, or when the copy on screen was saved after it (an edit that landed during the refresh).
+  const refreshStaleSips = async (list) => {
+    if (backgroundRefresh.current) return;
+    backgroundRefresh.current = true;
+    try {
+      for (const fund of list) {
+        if (!(fund.sip_amount > 0) || fund.sip_priced_through === todayIso()) continue;
+        try {
+          const response = await mutualFundsAPI.refreshNav(fund.id);
+          const refreshed = response.data.fund;
+          if (response.data.status === 'success' && refreshed && openFundId.current !== fund.id) {
+            setFunds((current) => current.map((f) => (
+              f.id === fund.id && !(f.updated_at > refreshed.updated_at) ? refreshed : f
+            )));
+          }
+        } catch (err) {
+          // quiet: the next load tries again
+        }
+      }
+    } finally {
+      backgroundRefresh.current = false;
     }
   };
 
@@ -98,39 +151,32 @@ export default function MutualFunds() {
         current_value: fund.current_value?.toString() || '',
         units: fund.units?.toString() || '',
         current_nav: fund.current_nav?.toString() || '',
-        folio_number: fund.folio_number || ''
+        folio_number: fund.folio_number || '',
+        sip_amount: fund.sip_amount?.toString() ?? '',
+        sip_frequency: fund.sip_frequency || 'monthly',
+        sip_day: fund.sip_day?.toString() ?? '',
+        sip_start_date: fund.sip_start_date || '',
+        sip_end_date: fund.sip_end_date || '',
+        holdings_date: fund.sip_amount > 0 && fund.holdings_date ? fund.holdings_date : todayIso()
       });
     } else {
       setEditingFund(null);
-      setFormData({
-        fund_name: '',
-        amc: '',
-        category: 'equity',
-        invested_amount: '',
-        current_value: '',
-        units: '',
-        current_nav: '',
-        folio_number: ''
-      });
+      setFormData(emptyForm());
     }
+    openFundId.current = fund ? fund.id : null;
+    setCurrentValueTouched(false);
     setError('');
     setModalOpen(true);
   };
 
   const closeModal = () => {
+    openFundId.current = null;
     setModalOpen(false);
     setEditingFund(null);
-    setFormData({
-      fund_name: '',
-      amc: '',
-      category: 'equity',
-      invested_amount: '',
-      current_value: '',
-      units: '',
-      current_nav: '',
-      folio_number: ''
-    });
+    setFormData(emptyForm());
   };
+
+  const editingSip = editingFund != null && editingFund.sip_amount > 0;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -143,11 +189,21 @@ export default function MutualFunds() {
         amc: formData.amc,
         category: formData.category,
         invested_amount: parseFloat(formData.invested_amount),
-        current_value: formData.current_value ? parseFloat(formData.current_value) : null,
         units: formData.units ? parseFloat(formData.units) : 0,
         current_nav: formData.current_nav ? parseFloat(formData.current_nav) : null,
-        folio_number: formData.folio_number || null
+        folio_number: formData.folio_number || null,
+        sip_amount: formData.sip_amount === '' ? null : parseFloat(formData.sip_amount),
+        sip_frequency: formData.sip_amount === '' ? null : formData.sip_frequency,
+        sip_day: formData.sip_amount === '' || formData.sip_frequency === 'weekly' || formData.sip_day === ''
+          ? null : parseInt(formData.sip_day, 10),
+        sip_start_date: formData.sip_amount === '' ? null : (formData.sip_start_date || null),
+        sip_end_date: formData.sip_amount === '' ? null : (formData.sip_end_date || null),
+        holdings_date: formData.sip_amount === '' ? null : (formData.holdings_date || null)
       };
+      // An edit leaves an untouched current value out, so the stored one stands
+      if (!editingFund || currentValueTouched) {
+        data.current_value = formData.current_value ? parseFloat(formData.current_value) : null;
+      }
 
       if (editingFund) {
         await mutualFundsAPI.update(editingFund.id, data);
@@ -158,7 +214,7 @@ export default function MutualFunds() {
       closeModal();
       fetchFunds();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save mutual fund');
+      setError(errorMessage(err, 'Failed to save mutual fund'));
     } finally {
       setSubmitting(false);
     }
@@ -180,7 +236,20 @@ export default function MutualFunds() {
     return formatCurrencyRaw(value);
   };
 
-  const totalInvested = funds.reduce((sum, fund) => sum + fund.invested_amount, 0);
+  // A SIP fund's invested amount counts its installments; the other fields are what was entered
+  const investedOf = (fund) => fund.total_invested ?? fund.invested_amount;
+  const unitsOf = (fund) => fund.total_units ?? fund.units;
+
+  const sipSummary = (fund) => {
+    const frequency = fund.sip_frequency || 'monthly';
+    const day = frequency !== 'weekly' && fund.sip_day ? ` on day ${fund.sip_day}` : '';
+    const since = fund.sip_start_date ? ` · since ${formatDate(fund.sip_start_date)}` : '';
+    const priced = fund.sip_priced_through ? ` · priced to ${formatDate(fund.sip_priced_through)}` : '';
+    const amount = privacyMode ? '₹ ••••••' : formatSipAmount(fund.sip_amount);
+    return `SIP ${amount} ${frequency}${day}${since}${priced}`;
+  };
+
+  const totalInvested = funds.reduce((sum, fund) => sum + investedOf(fund), 0);
   const totalCurrentValue = funds.reduce((sum, fund) => sum + (fund.current_value || 0), 0);
   const totalReturns = totalCurrentValue - totalInvested;
   const overallReturnPercent = totalInvested > 0 ? ((totalCurrentValue - totalInvested) / totalInvested) * 100 : 0;
@@ -308,9 +377,11 @@ export default function MutualFunds() {
             const categoryInfo = getCategoryInfo(fund.category);
             const CategoryIcon = categoryInfo.icon;
             const currentVal = fund.current_value || 0;
-            const returnAmount = currentVal - fund.invested_amount;
-            const returnPercent = fund.invested_amount > 0 
-              ? ((currentVal - fund.invested_amount) / fund.invested_amount) * 100 
+            const invested = investedOf(fund);
+            const units = unitsOf(fund);
+            const returnAmount = currentVal - invested;
+            const returnPercent = invested > 0
+              ? ((currentVal - invested) / invested) * 100
               : 0;
             const isPositive = returnAmount >= 0;
             
@@ -335,14 +406,14 @@ export default function MutualFunds() {
                     </div>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mt-2">
                       <span className="text-gray-500 dark:text-gray-400">
-                        Invested: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(fund.invested_amount)}</span>
+                        Invested: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(invested)}</span>
                       </span>
-                      {fund.units > 0 && (
+                      {units > 0 && (
                         <span className="text-gray-500 dark:text-gray-400">
-                          Units: <span className="text-gray-900 dark:text-white font-medium">{fund.units.toFixed(3)}</span>
+                          Units: <span className="text-gray-900 dark:text-white font-medium">{units.toFixed(3)}</span>
                         </span>
                       )}
-                      {fund.avg_nav > 0 && (
+                      {fund.avg_nav > 0 && !(fund.sip_amount > 0) && (
                         <span className="text-gray-500 dark:text-gray-400">
                           Avg NAV: <span className="text-gray-900 dark:text-white font-medium">₹{fund.avg_nav.toFixed(2)}</span>
                         </span>
@@ -353,6 +424,9 @@ export default function MutualFunds() {
                         </span>
                       )}
                     </div>
+                    {fund.sip_amount > 0 && (
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{sipSummary(fund)}</p>
+                    )}
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(currentVal)}</p>
@@ -453,7 +527,7 @@ export default function MutualFunds() {
                     className="input"
                     placeholder="0"
                     min="0"
-                    step="1"
+                    step="any"
                     value={formData.invested_amount}
                     onChange={(e) => setFormData({ ...formData, invested_amount: e.target.value })}
                     required
@@ -466,9 +540,12 @@ export default function MutualFunds() {
                     className="input"
                     placeholder="Auto-calculated from Units × Current NAV"
                     min="0"
-                    step="1"
+                    step="any"
                     value={formData.current_value}
-                    onChange={(e) => setFormData({ ...formData, current_value: e.target.value })}
+                    onChange={(e) => {
+                      setCurrentValueTouched(true);
+                      setFormData({ ...formData, current_value: e.target.value });
+                    }}
                   />
                 </div>
               </div>
@@ -480,7 +557,7 @@ export default function MutualFunds() {
                   className="input"
                   placeholder="0.000"
                   min="0"
-                  step="0.001"
+                  step="any"
                   value={formData.units}
                   onChange={(e) => setFormData({ ...formData, units: e.target.value })}
                 />
@@ -496,10 +573,99 @@ export default function MutualFunds() {
                   className="input"
                   placeholder="Leave empty to fetch from internet"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={formData.current_nav}
                   onChange={(e) => setFormData({ ...formData, current_nav: e.target.value })}
                 />
+              </div>
+
+              <div className="space-y-4 pt-4 border-t dark:border-gray-700">
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                  SIP <span className="text-gray-400 font-normal">(Optional)</span>
+                </p>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">SIP amount (₹)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="0"
+                      min="0"
+                      step="any"
+                      value={formData.sip_amount}
+                      onChange={(e) => setFormData({ ...formData, sip_amount: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Frequency</label>
+                    <select
+                      className="input"
+                      value={formData.sip_frequency}
+                      onChange={(e) => setFormData({ ...formData, sip_frequency: e.target.value })}
+                    >
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="quarterly">Quarterly</option>
+                    </select>
+                  </div>
+                </div>
+
+                {formData.sip_frequency !== 'weekly' && (
+                  <div>
+                    <label className="label">SIP date (day of month)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="e.g., 5"
+                      min="1"
+                      max="31"
+                      step="1"
+                      value={formData.sip_day}
+                      onChange={(e) => setFormData({ ...formData, sip_day: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">First SIP date</label>
+                    <input
+                      type="date"
+                      className="input"
+                      value={formData.sip_start_date}
+                      onChange={(e) => setFormData({ ...formData, sip_start_date: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Last SIP date <span className="text-gray-400 font-normal">(Optional)</span></label>
+                    <input
+                      type="date"
+                      className="input"
+                      value={formData.sip_end_date}
+                      onChange={(e) => setFormData({ ...formData, sip_end_date: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label">Units and invested amount as of</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={formData.holdings_date}
+                    onChange={(e) => setFormData({ ...formData, holdings_date: e.target.value })}
+                  />
+                </div>
+                {editingSip && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                    Changing the SIP amount, frequency or day applies from today: installments so far stay in your holding.
+                  </p>
+                )}
+
+                <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                  Each SIP installment after the 'as of' date buys units at that day's NAV (from mfapi.in); until NAVs are fetched, installments count at cost.
+                </p>
               </div>
 
               <div>

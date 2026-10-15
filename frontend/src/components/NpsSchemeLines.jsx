@@ -1,0 +1,39 @@
+import { RefreshCw } from 'lucide-react';
+import { formatDate } from '../utils/dates';
+
+// An NPS asset's schemes on its card: units × NAV and value when priced, otherwise the allocation only.
+export default function NpsSchemeLines({ asset, formatCurrency, privacyMode, refreshing, refreshError, onRefresh }) {
+  const priced = Boolean(asset.nps_priced_through);
+  return (
+    <div className="mt-2 space-y-1">
+      {asset.nps_schemes.map((s) => (
+        <div key={s.scheme_code} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+          <span className="min-w-0 truncate" title={s.scheme_name}>
+            {s.scheme_name} · {s.allocation_pct}%
+          </span>
+          {priced && s.current_units != null && (
+            <span className="ml-auto shrink-0 text-right">
+              {privacyMode ? '••' : s.current_units.toLocaleString('en-IN', { maximumFractionDigits: 4 })} units × ₹{s.nav}
+              {s.nav_date ? ` (${formatDate(s.nav_date)})` : ''} = {formatCurrency(s.current_value)}
+            </span>
+          )}
+        </div>
+      ))}
+      <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+        {priced ? <span>Contributions priced up to {formatDate(asset.nps_priced_through)}</span> : <span>NAV not available yet</span>}
+        <button
+          type="button"
+          onClick={() => onRefresh(asset.id)}
+          disabled={refreshing}
+          className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh NAV
+        </button>
+      </div>
+      {refreshError && (
+        <p role="alert" className="text-xs text-red-600 dark:text-red-400">{refreshError}</p>
+      )}
+    </div>
+  );
+}

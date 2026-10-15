@@ -31,8 +31,8 @@ def get_yahoo_symbol(symbol: str, market: str) -> str:
         return f"{symbol}.NS"
     elif market == "BSE":
         return f"{symbol}.BO"
-    elif market == "NASDAQ":
-        return symbol  # NASDAQ symbols don't need suffix
+    elif market in ("NASDAQ", "NYSE"):
+        return symbol  # US listings don't need a suffix
     else:
         return symbol
 

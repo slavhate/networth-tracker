@@ -7,16 +7,24 @@ import pyotp
 # Naive UTC, the same shape as datetime.utcnow() in the app.
 NOW = datetime(2026, 10, 12, 12, 0, 0)
 
-# Fixed secret so codes are deterministic (steps NOW_STEP-2..+2 give 5 distinct codes).
-SECRET = "JBSWY3DPEHPK3PXP"
-
-
 def step_of(when: datetime) -> int:
     """TOTP time step for a naive-UTC datetime, regardless of the machine's TZ."""
     return calendar.timegm(when.utctimetuple()) // 30
 
 
 NOW_STEP = step_of(NOW)  # 59726880
+
+
+def _random_secret() -> str:
+    """A random base32 secret whose codes at steps NOW_STEP-2..+2 are 5 distinct values (the tests rely on that)."""
+    while True:
+        secret = pyotp.random_base32()
+        if len({pyotp.TOTP(secret).generate_otp(NOW_STEP + offset) for offset in range(-2, 3)}) == 5:
+            return secret
+
+
+# Drawn at import so no secret is hardcoded in the repo; codes stay deterministic within a run.
+SECRET = _random_secret()
 
 
 def code_for(secret: str, step: int) -> str:

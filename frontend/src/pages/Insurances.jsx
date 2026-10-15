@@ -16,6 +16,7 @@ import {
   Calendar,
   AlertCircle
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
 
 const INSURANCE_TYPES = [
   { value: 'life', label: 'Life Insurance', icon: Heart, color: 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400' },
@@ -183,7 +184,7 @@ export default function Insurances() {
       closeModal();
       fetchInsurances();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save insurance');
+      setError(errorMessage(err, 'Failed to save insurance'));
     } finally {
       setSubmitting(false);
     }

@@ -13,6 +13,7 @@ import MutualFunds from './pages/MutualFunds';
 import Equities from './pages/Equities';
 import Security from './pages/Security';
 import Layout from './components/Layout';
+import Notices from './components/Notices';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -75,6 +76,7 @@ function App() {
             </Route>
           </Routes>
           </BrowserRouter>
+          <Notices />
         </AuthProvider>
       </PrivacyProvider>
     </ThemeProvider>
