@@ -312,8 +312,10 @@ Manual snapshots count. The snapshot is still taken when the dashboard is opened
 
 ## D3. Frontend (dashboard)
 
-- **Selector:** next to "Save Snapshot", a small "Auto snapshot" selector with Weekly / Every 2 weeks / Monthly / Quarterly. Changing it saves straight away.
+- **Dialog:** the header keeps only Refresh and "Save Snapshot". "Save Snapshot" opens a "Snapshots" dialog; Close, Escape or a click outside closes it.
+- **Selector:** in the dialog, an "Automatic snapshot" selector with Weekly / Every 2 weeks / Monthly / Quarterly. Changing it saves straight away; a failure shows inline under it.
 - **Caption:** below it, "Next automatic snapshot: <date>, saved when you open the dashboard on or after that day."
+- **Save now:** the dialog shows the date of the latest snapshot and a "Save now" button. Success closes the dialog and reloads the dashboard; a failure shows inline in the dialog.
 - **Empty-state hint:** names the chosen frequency.
 - **Mobile:** the layout wraps cleanly.
 

@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { dashboardAPI, goalAPI, snapshotSettingsAPI } from '../api';
+import { createPortal } from 'react-dom';
+import { dashboardAPI, goalAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import SnapshotDialog from '../components/SnapshotDialog';
 import { formatDate, formatMonthYear, todayIso } from '../utils/dates';
 import { categoryLabel } from '../utils/assetCategories';
 import { ASSET_CLASSES } from '../utils/assetClasses';
-import { errorMessage } from '../utils/errors';
+import { snapshotFrequency } from '../utils/snapshotFrequencies';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -54,23 +56,12 @@ const formatCurrencyRaw = (value) => {
 const snapshotDateLabel = (timestamp) =>
   new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
 
-// How often the dashboard saves an automatic snapshot; `phrase` completes the empty-state hint
-const SNAPSHOT_FREQUENCIES = [
-  { value: 'weekly', label: 'Weekly', phrase: 'every week' },
-  { value: 'fortnightly', label: 'Every 2 weeks', phrase: 'every 2 weeks' },
-  { value: 'monthly', label: 'Monthly', phrase: 'once a month' },
-  { value: 'quarterly', label: 'Quarterly', phrase: 'once a quarter' },
-];
-const DEFAULT_SNAPSHOT_FREQUENCY = 'monthly';
-
 export default function Dashboard() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [frequencySaving, setFrequencySaving] = useState(false);
-  const [frequencyError, setFrequencyError] = useState('');
+  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
   const [goal, setGoal] = useState(null);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [goalInput, setGoalInput] = useState('');
@@ -114,35 +105,20 @@ export default function Dashboard() {
     fetchDashboard();
   }, []);
 
-  const handleSnapshot = async () => {
-    try {
-      setSnapshotLoading(true);
-      await dashboardAPI.createSnapshot();
-      await fetchDashboard();
-    } catch (err) {
-      setError('Failed to create snapshot');
-    } finally {
-      setSnapshotLoading(false);
-    }
+  const closeSnapshotDialog = () => setSnapshotDialogOpen(false);
+
+  const snapshotFrequencyChanged = (settings) => {
+    setMetrics((current) => ({
+      ...current,
+      snapshot_frequency: settings.frequency,
+      next_snapshot_on: settings.next_snapshot_on
+    }));
   };
 
-  // Saves the new frequency straight away; the response also carries the recalculated next date
-  const changeSnapshotFrequency = async (value) => {
-    try {
-      setFrequencySaving(true);
-      setFrequencyError('');
-      const response = await snapshotSettingsAPI.update(value);
-      setMetrics((current) => ({
-        ...current,
-        snapshot_frequency: response.data.frequency,
-        next_snapshot_on: response.data.next_snapshot_on
-      }));
-    } catch (err) {
-      // Shown inline: the page-level error would replace the whole dashboard
-      setFrequencyError(errorMessage(err, 'Failed to change the snapshot frequency'));
-    } finally {
-      setFrequencySaving(false);
-    }
+  // A manual snapshot adds a history point and can move the next automatic date
+  const snapshotSaved = () => {
+    setSnapshotDialogOpen(false);
+    fetchDashboard();
   };
 
   const openGoalModal = () => {
@@ -182,9 +158,7 @@ export default function Dashboard() {
 
   const netWorthPositive = metrics?.net_worth >= 0;
 
-  // Older responses without the field show the default
-  const snapshotFrequency = SNAPSHOT_FREQUENCIES.find((f) => f.value === metrics?.snapshot_frequency)
-    || SNAPSHOT_FREQUENCIES.find((f) => f.value === DEFAULT_SNAPSHOT_FREQUENCY);
+  const autoSnapshot = snapshotFrequency(metrics?.snapshot_frequency);
 
   // Format currency with privacy mode support
   const formatCurrency = (value) => {
@@ -243,46 +217,35 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Track your financial health</p>
         </div>
-        <div className="flex flex-col gap-2 sm:items-end">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={fetchDashboard}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Refresh
-            </button>
-            <div className="flex items-center gap-2">
-              <label htmlFor="auto-snapshot" className="text-sm text-gray-600 dark:text-gray-400">Auto snapshot</label>
-              <select
-                id="auto-snapshot"
-                className="input !w-auto !py-2 text-sm"
-                value={snapshotFrequency.value}
-                onChange={(e) => changeSnapshotFrequency(e.target.value)}
-                disabled={frequencySaving}
-              >
-                {SNAPSHOT_FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={handleSnapshot}
-              disabled={snapshotLoading}
-              className="btn-primary flex items-center gap-2"
-            >
-              <Camera className="w-4 h-4" />
-              {snapshotLoading ? 'Saving...' : 'Save Snapshot'}
-            </button>
-          </div>
-          {metrics?.next_snapshot_on && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 sm:max-w-md sm:text-right">
-              Next automatic snapshot: {formatDate(metrics.next_snapshot_on)}, saved when you open the dashboard on or after that day.
-            </p>
-          )}
-          {frequencyError && (
-            <p role="alert" className="text-xs text-red-600 dark:text-red-400">{frequencyError}</p>
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={fetchDashboard}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </button>
+          <button
+            onClick={() => setSnapshotDialogOpen(true)}
+            aria-haspopup="dialog"
+            className="btn-primary flex items-center gap-2"
+          >
+            <Camera className="w-4 h-4" />
+            Save Snapshot
+          </button>
         </div>
       </div>
+
+      {snapshotDialogOpen && (
+        <SnapshotDialog
+          frequency={autoSnapshot.value}
+          nextSnapshotOn={metrics?.next_snapshot_on}
+          lastSnapshotOn={metrics?.net_worth_history?.[0]?.timestamp.slice(0, 10)}
+          onClose={closeSnapshotDialog}
+          onFrequencyChanged={snapshotFrequencyChanged}
+          onSaved={snapshotSaved}
+        />
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -496,8 +459,8 @@ export default function Dashboard() {
         );
       })()}
 
-      {/* Goal Edit Modal */}
-      {goalModalOpen && (
+      {/* Goal Edit Modal, on <body> so the space-y margin can't shift the fixed overlay */}
+      {goalModalOpen && createPortal(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-sm">
             <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
@@ -532,7 +495,8 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Deposits maturing */}
@@ -696,7 +660,7 @@ export default function Dashboard() {
           <div className="h-72 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <p>No history yet.</p>
-              <p className="text-sm mt-1">A snapshot is saved automatically {snapshotFrequency.phrase} when you open the dashboard; Save Snapshot adds one now.</p>
+              <p className="text-sm mt-1">A snapshot is saved automatically {autoSnapshot.phrase} when you open the dashboard; use Save Snapshot to add one now or change how often.</p>
             </div>
           </div>
         )}

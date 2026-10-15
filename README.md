@@ -129,9 +129,9 @@ Alongside the breakdown by where an asset sits (category), the dashboard shows w
   - **Monthly** (the default): one per calendar month, due on the 1st of the next month once this month has one.
   - **Quarterly**: one per calendar quarter (January to March, April to June, July to September, October to December), due on the first day of the next quarter once this quarter has one.
   - A snapshot you save yourself counts toward the schedule, snapshots dated in the future are ignored, and an account with nothing in it is skipped.
-- The dashboard shows the date the next automatic snapshot is due, next to a selector for the frequency. The same setting is available at `GET` and `PUT /api/settings/snapshots` (`{"frequency": "weekly" | "fortnightly" | "monthly" | "quarterly"}`).
+- **Save Snapshot** on the dashboard opens a dialog with the frequency selector, the date the next automatic snapshot is due, the date of your latest snapshot and a button to save one now. The frequency is also available at `GET` and `PUT /api/settings/snapshots` (`{"frequency": "weekly" | "fortnightly" | "monthly" | "quarterly"}`).
 - The frequency is a per-user setting. It is not part of backups, so a restore leaves it as it is, and a new user starts on monthly.
-- **Save Snapshot** adds an extra point at any time. The dashboard shows the month-over-month change in net worth against the latest snapshot from an earlier month, and the allocation-history chart plots the class split of the snapshots over time.
+- A snapshot saved from the dialog adds an extra point at any time. The dashboard shows the month-over-month change in net worth against the latest snapshot from an earlier month, and the allocation-history chart plots the class split of the snapshots over time.
 - Snapshots taken before breakdowns were recorded keep only their totals; they still appear in the net worth history. Backups (export and restore) carry the breakdowns along.
 
 ## Tech Stack
