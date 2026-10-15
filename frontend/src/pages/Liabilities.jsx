@@ -2,14 +2,14 @@ import { useState, useEffect } from 'react';
 import { liabilitiesAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
 import LoanScheduleModal from '../components/LoanScheduleModal';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import ItemTile, { ItemTileGrid, TileAction } from '../components/ItemTile';
+import {
+  Plus,
+  X,
   CreditCard,
   Home,
   Car,
@@ -222,8 +222,9 @@ export default function Liabilities() {
               <p className="text-3xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalLiabilities} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalLiabilities) : undefined}
                 />
               </p>
             </div>
@@ -264,81 +265,68 @@ export default function Liabilities() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {liabilities.map((liability) => {
             const categoryInfo = getCategoryInfo(liability.category);
-            const CategoryIcon = categoryInfo.icon;
-            
+
             return (
-              <div key={liability.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${categoryInfo.color}`}>
-                    <CategoryIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{liability.name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-gray-500">
-                      <span>{categoryInfo.label}</span>
-                      {liability.interest_rate != null && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                          {liability.interest_rate}% APR
-                        </span>
-                      )}
+              <ItemTile
+                key={liability.id}
+                icon={categoryInfo.icon}
+                iconColor={categoryInfo.color}
+                title={liability.name}
+                subtitle={categoryInfo.label}
+                badges={liability.interest_rate != null && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                    {liability.interest_rate}% APR
+                  </span>
+                )}
+                itemLabel={liability.name}
+                actions={liability.amortized && !liability.emi_too_low && (
+                  <TileAction label="Repayment schedule" onClick={() => setScheduleFor(liability)}>
+                    <CalendarDays className="w-4 h-4" />
+                  </TileAction>
+                )}
+                onEdit={() => openModal(liability)}
+                onDelete={() => handleDelete(liability.id)}
+                amountLabel="Outstanding"
+                amount={formatCurrency(liability.outstanding)}
+                amountValue={liability.outstanding}
+                amountClassName="text-red-600 dark:text-red-400"
+                privacyMode={privacyMode}
+              >
+                {liability.amortized && (
+                  liability.emi_too_low ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>EMI {formatCurrency(liability.emi)}</span>
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                        EMI doesn't cover the interest
+                      </span>
                     </div>
-                    {liability.description && (
-                      <p className="text-sm text-gray-400 truncate mt-1">{liability.description}</p>
-                    )}
-                    {liability.amortized && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        EMI {formatCurrency(liability.emi)}
-                        {liability.emi_too_low ? (
-                          <span className="ml-2 inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
-                            EMI doesn't cover the interest
-                          </span>
-                        ) : (
-                          <>
-                            {liability.payoff_date && (
-                              <> · paid off by {formatMonthYear(liability.payoff_date)} · {formatCurrency(liability.interest_remaining)} interest left</>
-                            )}
-                            {liability.next_emi_interest != null && liability.next_emi_principal != null && (
-                              <> · next EMI: {formatCurrency(liability.next_emi_interest)} interest + {formatCurrency(liability.next_emi_principal)} principal</>
-                            )}
-                          </>
-                        )}
+                  ) : (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-700 dark:text-gray-200">EMI {formatCurrency(liability.emi)}</span>
+                        {liability.payoff_date && <> · paid off by {formatMonthYear(liability.payoff_date)}</>}
                       </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-red-600">{formatCurrency(liability.outstanding)}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    {liability.amortized && !liability.emi_too_low && (
-                      <button
-                        onClick={() => setScheduleFor(liability)}
-                        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
-                        title="Repayment schedule"
-                      >
-                        <CalendarDays className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => openModal(liability)}
-                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(liability.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+                      {liability.payoff_date && (
+                        <p>{formatCurrency(liability.interest_remaining)} interest left</p>
+                      )}
+                      {liability.next_emi_interest != null && liability.next_emi_principal != null && (
+                        <p>
+                          Next EMI: {formatCurrency(liability.next_emi_interest)} interest + {formatCurrency(liability.next_emi_principal)} principal
+                        </p>
+                      )}
+                    </>
+                  )
+                )}
+                {liability.description && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 line-clamp-2" title={liability.description}>{liability.description}</p>
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}

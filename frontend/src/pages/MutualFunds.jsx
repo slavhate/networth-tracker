@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { mutualFundsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
 import { 
@@ -335,8 +336,9 @@ export default function MutualFunds() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalInvested} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalInvested) : undefined}
                 />
               </p>
             </div>
@@ -353,8 +355,9 @@ export default function MutualFunds() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalCurrentValue} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalCurrentValue) : undefined}
                 />
               </p>
             </div>
@@ -371,8 +374,9 @@ export default function MutualFunds() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={Math.abs(totalReturns)} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(Math.abs(totalReturns)) : undefined}
                 />
               </p>
             </div>

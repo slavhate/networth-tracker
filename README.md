@@ -9,6 +9,12 @@ A professional, full-featured web application for tracking personal net worth wi
 
 ![Net Worth Dashboard](/images/dashboard.png)
 
+| Assets as tiles | Dark mode |
+|---|---|
+| ![Assets page with a grid of tiles](/images/assets.png) | ![Dashboard in dark mode](/images/dashboard-dark.png) |
+
+_Screenshots use the built-in demo data (`CREATE_DEMO_DATA=true`); all names and amounts are made up._
+
 ## About This Project
 
 - **Vibe Coded with Claude** - This entire project was vibe coded with the help of Claude AI (Anthropic)

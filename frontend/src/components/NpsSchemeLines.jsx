@@ -5,21 +5,26 @@ import { formatDate } from '../utils/dates';
 export default function NpsSchemeLines({ asset, formatCurrency, privacyMode, refreshing, refreshError, onRefresh }) {
   const priced = Boolean(asset.nps_priced_through);
   return (
-    <div className="mt-2 space-y-1">
-      {asset.nps_schemes.map((s) => (
-        <div key={s.scheme_code} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
-          <span className="min-w-0 truncate" title={s.scheme_name}>
-            {s.scheme_name} · {s.allocation_pct}%
-          </span>
-          {priced && s.current_units != null && (
-            <span className="ml-auto shrink-0 text-right">
-              {privacyMode ? '••' : s.current_units.toLocaleString('en-IN', { maximumFractionDigits: 4 })} units × ₹{s.nav}
-              {s.nav_date ? ` (${formatDate(s.nav_date)})` : ''} = {formatCurrency(s.current_value)}
-            </span>
-          )}
-        </div>
-      ))}
-      <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        {asset.nps_schemes.map((s) => (
+          <div key={s.scheme_code} className="text-xs text-gray-500 dark:text-gray-400">
+            <div className="flex items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate font-medium text-gray-600 dark:text-gray-300" title={s.scheme_name}>
+                {s.scheme_name}
+              </span>
+              <span className="shrink-0 tabular-nums">{s.allocation_pct}%</span>
+            </div>
+            {priced && s.current_units != null && (
+              <div className="tabular-nums text-gray-400 dark:text-gray-500">
+                {privacyMode ? '••' : s.current_units.toLocaleString('en-IN', { maximumFractionDigits: 4 })} units × ₹{s.nav}
+                {s.nav_date ? ` (${formatDate(s.nav_date)})` : ''} = {formatCurrency(s.current_value)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-400 dark:text-gray-500">
         {priced ? <span>Contributions priced up to {formatDate(asset.nps_priced_through)}</span> : <span>NAV not available yet</span>}
         <button
           type="button"

@@ -1,6 +1,6 @@
 // Self-check for indianNumbers.js (the project has no test runner): node src/utils/indianNumbers.check.js
 import assert from 'node:assert/strict';
-import { formatCompactINR, amountInWords } from './indianNumbers.js';
+import { formatCompactINR, amountInWords, formatShortINR } from './indianNumbers.js';
 
 const compact = [
   [12500000, '₹1.25 Cr'],
@@ -51,5 +51,16 @@ const words = [
   ['1250000', '₹12.5 Lakh'],
 ];
 for (const [input, expected] of words) assert.equal(amountInWords(input), expected, `amountInWords(${input})`);
+
+// formatShortINR: lakh/crore words from ₹1 lakh up, the full amount below
+assert.equal(formatShortINR(12345678), '₹1.23 Crore');
+assert.equal(formatShortINR(4567890), '₹45.68 Lakh');
+assert.equal(formatShortINR(100000), '₹1 Lakh');
+assert.equal(formatShortINR(99999.6), '₹1 Lakh');
+assert.equal(formatShortINR(85000), '₹85,000');
+assert.equal(formatShortINR(0), '₹0');
+assert.equal(formatShortINR(-0.4), '₹0');
+assert.equal(formatShortINR(-250000), '-₹2.5 Lakh');
+assert.equal(formatShortINR(NaN), '—');
 
 console.log('indianNumbers: all checks passed');

@@ -9,7 +9,7 @@ import { categoryLabel } from '../utils/assetCategories';
 import { ASSET_CLASSES } from '../utils/assetClasses';
 import { snapshotFrequency } from '../utils/snapshotFrequencies';
 import { errorMessage } from '../utils/errors';
-import { formatCompactINR, amountInWords } from '../utils/indianNumbers';
+import { formatCompactINR, amountInWords, formatShortINR } from '../utils/indianNumbers';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -193,11 +193,8 @@ export default function Dashboard() {
   // Non-breaking space: Recharts wraps tick labels at spaces ("₹1.05 Cr" would split over two lines)
   const formatAxisAmount = (value) => (privacyMode ? '••' : formatCompactINR(value).replace(' ', '\u00A0'));
 
-  // The amount in words (₹12.5 Lakh, ₹1.25 Crore) under a full amount; nothing in privacy mode or below ₹1,000
-  const wordsCaption = (value, className = 'text-xs text-gray-400 dark:text-gray-500') => {
-    const words = privacyMode ? '' : amountInWords(value);
-    return words ? <p className={className}>{words}</p> : null;
-  };
+  // Card figures are short (₹1.25 Crore, formatShortINR); the full amount shows on hover, except in privacy mode
+  const fullAmountTitle = (value) => (privacyMode ? undefined : formatCurrencyRaw(value || 0));
 
   // Latest snapshot from an earlier calendar month (history is newest first)
   const thisMonth = todayIso().slice(0, 7);
@@ -292,29 +289,31 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* Net Worth */}
         <div className={`stat-card border-l-4 ${netWorthPositive ? 'border-l-green-500' : 'border-l-red-500'}`}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-medium text-gray-500">Net Worth</p>
-              <p className={`text-2xl font-bold mt-1 ${netWorthPositive ? 'text-green-600' : 'text-red-600'}`}>
-                <AnimatedNumber 
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Net Worth</p>
+              <p className={`text-2xl font-bold mt-1 ${netWorthPositive ? 'text-green-600' : 'text-red-600'}`} title={fullAmountTitle(metrics?.net_worth)}>
+                <AnimatedNumber
                   value={metrics?.net_worth || 0}
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
-              {wordsCaption(metrics?.net_worth)}
               {netWorthChange != null && (
-                <p className={`text-xs mt-1 ${netWorthChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                  {netWorthChange >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(netWorthChange))}
+                <p
+                  className={`text-xs mt-1 ${netWorthChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                  title={fullAmountTitle(Math.abs(netWorthChange))}
+                >
+                  {netWorthChange >= 0 ? '▲' : '▼'} {privacyMode ? '₹ ••••••' : formatShortINR(Math.abs(netWorthChange))}
                   {netWorthChangePercent != null && <> ({privacyMode ? '••' : `${Math.abs(netWorthChangePercent).toFixed(1)}%`})</>} since {formatMonthYear(previousSnapshot.timestamp.slice(0, 10))}
                 </p>
               )}
             </div>
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${netWorthPositive ? 'bg-green-100' : 'bg-red-100'}`}>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${netWorthPositive ? 'bg-green-100 dark:bg-green-900/50' : 'bg-red-100 dark:bg-red-900/50'}`}>
               {netWorthPositive ? (
-                <TrendingUp className="w-6 h-6 text-green-600" />
+                <TrendingUp className="w-6 h-6 text-green-600 dark:text-green-400" />
               ) : (
-                <TrendingDown className="w-6 h-6 text-red-600" />
+                <TrendingDown className="w-6 h-6 text-red-600 dark:text-red-400" />
               )}
             </div>
           </div>
@@ -322,17 +321,16 @@ export default function Dashboard() {
 
         {/* Total Assets */}
         <div className="stat-card border-l-4 border-l-primary-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Assets</p>
-              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-                <AnimatedNumber 
-                  value={metrics?.total_assets || 0} 
-                  formatter={formatCurrencyRaw}
+              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white" title={fullAmountTitle(metrics?.total_assets)}>
+                <AnimatedNumber
+                  value={metrics?.total_assets || 0}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
-              {wordsCaption(metrics?.total_assets)}
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{metrics?.asset_count || 0} assets</p>
             </div>
             <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900/50 rounded-xl flex items-center justify-center">
@@ -343,17 +341,16 @@ export default function Dashboard() {
 
         {/* Total Liabilities */}
         <div className="stat-card border-l-4 border-l-orange-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Liabilities</p>
-              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-                <AnimatedNumber 
-                  value={metrics?.total_liabilities || 0} 
-                  formatter={formatCurrencyRaw}
+              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white" title={fullAmountTitle(metrics?.total_liabilities)}>
+                <AnimatedNumber
+                  value={metrics?.total_liabilities || 0}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
-              {wordsCaption(metrics?.total_liabilities)}
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{metrics?.liability_count || 0} liabilities</p>
             </div>
             <div className="w-12 h-12 bg-orange-100 dark:bg-orange-900/50 rounded-xl flex items-center justify-center">
@@ -364,7 +361,7 @@ export default function Dashboard() {
 
         {/* Debt-to-Asset Ratio */}
         <div className="stat-card border-l-4 border-l-purple-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Debt-to-Asset Ratio</p>
               <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
@@ -451,7 +448,8 @@ export default function Dashboard() {
                       className="h-full bg-gradient-to-r from-white/90 to-white rounded-full transition-all duration-500 ease-out relative"
                       style={{ width: `${shownProgress}%` }}
                     >
-                      {shownProgress > 5 && (
+                      {/* Only once the fill is wide enough for the label; "Current" beside the bar shows it anyway */}
+                      {shownProgress >= 15 && (
                         <span className="absolute right-2 top-1/2 -translate-y-1/2 text-purple-600 text-xs font-bold whitespace-nowrap">
                           {/* Short form: the full amount doesn't fit inside a narrow bar */}
                           {formatCompactINR(currentNetWorth)}
@@ -491,19 +489,20 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Current</p>
-                    <p className="font-bold text-sm mt-0.5">{formatCurrency(currentNetWorth)}</p>
-                    {wordsCaption(currentNetWorth, 'text-white/60 text-xs')}
+                    <p className="font-bold text-sm mt-0.5" title={fullAmountTitle(currentNetWorth)}>
+                      {privacyMode ? '₹ ••••••' : formatShortINR(currentNetWorth)}
+                    </p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Remaining</p>
-                    <p className="font-bold text-sm mt-0.5">{hasTarget ? formatCurrency(remaining) : '—'}</p>
-                    {hasTarget && wordsCaption(remaining, 'text-white/60 text-xs')}
+                    <p className="font-bold text-sm mt-0.5" title={hasTarget ? fullAmountTitle(remaining) : undefined}>
+                      {!hasTarget ? '—' : privacyMode ? '₹ ••••••' : formatShortINR(remaining)}
+                    </p>
                   </div>
                 </div>
                 {showProgress && progress < 100 && (
                   <p className="text-white/60 text-xs text-center mt-2">
-                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> ({formatCurrency(goalTarget * nextMilestone.percent / 100)}
-                    {amountInWords(goalTarget * nextMilestone.percent / 100) && ` · ${amountInWords(goalTarget * nextMilestone.percent / 100)}`})
+                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> (<span title={fullAmountTitle(goalTarget * nextMilestone.percent / 100)}>{formatShortINR(goalTarget * nextMilestone.percent / 100)}</span>)
                   </p>
                 )}
                 {showProgress && progress >= 100 && (

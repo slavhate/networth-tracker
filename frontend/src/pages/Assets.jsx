@@ -2,14 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import { assetsAPI, npsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
 import NpsSchemesEditor, { schemeRowsError } from '../components/NpsSchemesEditor';
 import NpsSchemeLines from '../components/NpsSchemeLines';
+import ItemTile, { ItemTileGrid } from '../components/ItemTile';
 import {
   Plus,
-  Edit2,
-  Trash2,
   X,
   Wallet
 } from 'lucide-react';
@@ -304,8 +304,9 @@ export default function Assets() {
             <p className="text-3xl font-bold mt-1">
               <AnimatedNumber 
                 value={totalAssets} 
-                formatter={formatCurrencyRaw}
+                formatter={formatShortINR}
                 privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                title={loaded && !privacyMode ? formatCurrencyRaw(totalAssets) : undefined}
               />
             </p>
           </div>
@@ -327,80 +328,66 @@ export default function Assets() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {assets.map((asset) => {
             const categoryInfo = assetCategoryInfo(asset.category);
-            const CategoryIcon = categoryInfo.icon;
-            
+
             return (
-              <div key={asset.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${categoryInfo.color}`}>
-                    <CategoryIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{asset.name}</h3>
-                    <p className="text-sm text-gray-500">{categoryInfo.label}</p>
-                    {categoryInfo.kind === 'provident' && asset.interest_rate != null && asset.valuation_date && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)} · +{formatCurrency(asset.monthly_contribution || 0)}/month at {asset.interest_rate}%
-                      </p>
-                    )}
-                    {categoryInfo.kind === 'quantity' && asset.quantity != null && asset.unit_price != null && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {privacyMode ? '••' : asset.quantity} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
-                      </p>
-                    )}
-                    {categoryInfo.kind === 'nps' && asset.valuation_date
-                      && (asset.monthly_contribution > 0 || asset.yearly_contribution > 0 || asset.annual_change_rate != null) && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)}
-                        {asset.monthly_contribution > 0 ? ` · +${formatCurrency(asset.monthly_contribution)}/month` : ''}
-                        {asset.yearly_contribution > 0 ? ` · +${formatCurrency(asset.yearly_contribution)} every ${MONTHS[(asset.yearly_contribution_month || 3) - 1]}` : ''}
-                        {asset.annual_change_rate != null ? ` · ${asset.annual_change_rate}%/yr expected` : ''}
-                      </p>
-                    )}
-                    {categoryInfo.kind === 'nps' && asset.nps_schemes?.length > 0 && (
-                      <NpsSchemeLines
-                        asset={asset}
-                        formatCurrency={formatCurrency}
-                        privacyMode={privacyMode}
-                        refreshing={refreshingIds.includes(asset.id)}
-                        refreshError={refreshErrors[asset.id]}
-                        onRefresh={(id) => refreshNav(id)}
-                      />
-                    )}
-                    {categoryInfo.kind !== 'nps' && asset.annual_change_rate != null && asset.valuation_date && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)} · {asset.annual_change_rate > 0 ? '+' : ''}{asset.annual_change_rate}%/yr
-                      </p>
-                    )}
-                    {asset.description && (
-                      <p className="text-sm text-gray-400 truncate mt-1">{asset.description}</p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(asset.current_value)}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => openModal(asset)}
-                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(asset.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <ItemTile
+                key={asset.id}
+                icon={categoryInfo.icon}
+                iconColor={categoryInfo.color}
+                title={asset.name}
+                subtitle={categoryInfo.label}
+                itemLabel={asset.name}
+                onEdit={() => openModal(asset)}
+                onDelete={() => handleDelete(asset.id)}
+                amountLabel="Current value"
+                amount={formatCurrency(asset.current_value)}
+                amountValue={asset.current_value}
+                privacyMode={privacyMode}
+              >
+                {categoryInfo.kind === 'provident' && asset.interest_rate != null && asset.valuation_date && (
+                  <p>
+                    {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)} · +{formatCurrency(asset.monthly_contribution || 0)}/month at {asset.interest_rate}%
+                  </p>
+                )}
+                {categoryInfo.kind === 'quantity' && asset.quantity != null && asset.unit_price != null && (
+                  <p>
+                    {privacyMode ? '••' : asset.quantity} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
+                  </p>
+                )}
+                {categoryInfo.kind === 'nps' && asset.valuation_date
+                  && (asset.monthly_contribution > 0 || asset.yearly_contribution > 0 || asset.annual_change_rate != null) && (
+                  <p>
+                    {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)}
+                    {asset.monthly_contribution > 0 ? ` · +${formatCurrency(asset.monthly_contribution)}/month` : ''}
+                    {asset.yearly_contribution > 0 ? ` · +${formatCurrency(asset.yearly_contribution)} every ${MONTHS[(asset.yearly_contribution_month || 3) - 1]}` : ''}
+                    {asset.annual_change_rate != null ? ` · ${asset.annual_change_rate}%/yr expected` : ''}
+                  </p>
+                )}
+                {categoryInfo.kind === 'nps' && asset.nps_schemes?.length > 0 && (
+                  <NpsSchemeLines
+                    asset={asset}
+                    formatCurrency={formatCurrency}
+                    privacyMode={privacyMode}
+                    refreshing={refreshingIds.includes(asset.id)}
+                    refreshError={refreshErrors[asset.id]}
+                    onRefresh={(id) => refreshNav(id)}
+                  />
+                )}
+                {categoryInfo.kind !== 'nps' && asset.annual_change_rate != null && asset.valuation_date && (
+                  <p>
+                    {formatCurrency(asset.value)} on {formatDate(asset.valuation_date)} · {asset.annual_change_rate > 0 ? '+' : ''}{asset.annual_change_rate}%/yr
+                  </p>
+                )}
+                {asset.description && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 line-clamp-2" title={asset.description}>{asset.description}</p>
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}

@@ -11,7 +11,8 @@ export default function AnimatedNumber({
   value, 
   formatter = (n) => n.toLocaleString(), 
   duration = 1000,
-  privacyMask = null 
+  privacyMask = null,
+  title, // shown on hover, e.g. the full amount behind a short "₹1.25 Crore"
 }) {
   const [displayValue, setDisplayValue] = useState(0);
   const [hasAnimated, setHasAnimated] = useState(false);
@@ -26,6 +27,15 @@ export default function AnimatedNumber({
     }
 
     const targetValue = value || 0;
+
+    // Respect the "reduce motion" accessibility setting: show the final value straight away
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayValue(targetValue);
+      previousValueRef.current = targetValue;
+      setHasAnimated(true);
+      return;
+    }
+
     const startValue = hasAnimated ? previousValueRef.current : 0;
     
     // Easing function for smooth animation
@@ -68,5 +78,5 @@ export default function AnimatedNumber({
     return <>{privacyMask}</>;
   }
 
-  return <>{formatter(displayValue)}</>;
+  return title ? <span title={title}>{formatter(displayValue)}</span> : <>{formatter(displayValue)}</>;
 }

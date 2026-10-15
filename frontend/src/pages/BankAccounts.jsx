@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { bankAccountsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import ItemTile, { ItemTileGrid } from '../components/ItemTile';
+import {
+  Plus,
+  X,
   Building2,
   Landmark,
   PiggyBank,
@@ -204,8 +204,9 @@ export default function BankAccounts() {
             <p className="text-3xl font-bold mt-1">
               <AnimatedNumber 
                 value={totalBalance} 
-                formatter={formatCurrencyRaw}
+                formatter={formatShortINR}
                 privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                title={loaded && !privacyMode ? formatCurrencyRaw(totalBalance) : undefined}
               />
             </p>
             {loaded && <p className="text-blue-100 text-sm mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>}
@@ -228,65 +229,62 @@ export default function BankAccounts() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {accounts.map((account) => {
             const typeInfo = getAccountTypeInfo(account.account_type);
-            const TypeIcon = typeInfo.icon;
-            
+            const isDeposit = DEPOSIT_TYPES.includes(account.account_type);
+
             return (
-              <div key={account.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${typeInfo.color}`}>
-                    <TypeIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{account.bank_name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                      <span>{typeInfo.label}</span>
-                      <span>•</span>
-                      <span>{maskAccountNumber(account.account_number)}</span>
-                    </div>
-                    {account.branch && (
-                      <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">{account.branch}</p>
+              <ItemTile
+                key={account.id}
+                icon={typeInfo.icon}
+                iconColor={typeInfo.color}
+                title={account.bank_name}
+                subtitle={`${typeInfo.label} • ${maskAccountNumber(account.account_number)}`}
+                badges={(isDeposit && account.interest_rate != null) || account.matured ? (
+                  <>
+                    {isDeposit && account.interest_rate != null && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                        {account.interest_rate}% p.a.
+                      </span>
                     )}
-                    {account.days_to_maturity != null && (
-                      account.matured ? (
-                        <p className="text-xs font-medium text-red-600 dark:text-red-400 mt-1">
-                          Matured on {formatDate(account.maturity_date)} — update or renew it
-                        </p>
-                      ) : (
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Matures in {account.days_to_maturity} day{account.days_to_maturity === 1 ? '' : 's'} ({formatDate(account.maturity_date)})
-                          {account.maturity_value != null && <> · {formatCurrency(account.maturity_value)}</>}
-                        </p>
-                      )
+                    {account.matured && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                        Matured
+                      </span>
                     )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(account.current_value)}</p>
-                    {account.ifsc_code && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500">IFSC: {account.ifsc_code}</p>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => openModal(account)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(account.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+                  </>
+                ) : null}
+                itemLabel={account.bank_name}
+                onEdit={() => openModal(account)}
+                onDelete={() => handleDelete(account.id)}
+                amountLabel={isDeposit ? 'Current value' : 'Balance'}
+                amount={formatCurrency(account.current_value)}
+                amountValue={account.current_value}
+                privacyMode={privacyMode}
+              >
+                {account.branch && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 truncate" title={account.branch}>{account.branch}</p>
+                )}
+                {account.ifsc_code && (
+                  <p className="text-gray-400 dark:text-gray-500">IFSC: {account.ifsc_code}</p>
+                )}
+                {account.days_to_maturity != null && (
+                  account.matured ? (
+                    <p className="font-medium text-red-600 dark:text-red-400">
+                      Matured on {formatDate(account.maturity_date)} — update or renew it
+                    </p>
+                  ) : (
+                    <p>
+                      Matures in {account.days_to_maturity} day{account.days_to_maturity === 1 ? '' : 's'} ({formatDate(account.maturity_date)})
+                      {account.maturity_value != null && <> · {formatCurrency(account.maturity_value)}</>}
+                    </p>
+                  )
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}

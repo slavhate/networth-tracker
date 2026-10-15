@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { insurancesAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import ItemTile, { ItemTileGrid } from '../components/ItemTile';
+import {
+  Plus,
+  X,
   Shield,
   Heart,
   Car,
@@ -242,8 +242,9 @@ export default function Insurances() {
               <p className="text-2xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalCoverage} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalCoverage) : undefined}
                 />
               </p>
             </div>
@@ -260,8 +261,9 @@ export default function Insurances() {
               <p className="text-2xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalPremium} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalPremium) : undefined}
                 />
               </p>
             </div>
@@ -299,65 +301,42 @@ export default function Insurances() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {insurances.map((insurance) => {
             const typeInfo = getInsuranceTypeInfo(insurance.insurance_type);
-            const TypeIcon = typeInfo.icon;
             const expiryStatus = getExpiryStatus(insurance.end_date);
-            
+
             return (
-              <div key={insurance.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${typeInfo.color}`}>
-                    <TypeIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-gray-900 dark:text-white">{insurance.policy_name}</h3>
-                      {expiryStatus.label && (
-                        <span className={`text-xs px-2 py-1 rounded-full ${expiryStatus.color}`}>
-                          {expiryStatus.label}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500 dark:text-gray-400 mt-1">
-                      <span>{typeInfo.label}</span>
-                      <span>•</span>
-                      <span>{insurance.provider}</span>
-                      {insurance.policy_number && (
-                        <>
-                          <span>•</span>
-                          <span>Policy: {insurance.policy_number}</span>
-                        </>
-                      )}
-                    </div>
-                    {insurance.notes && (
-                      <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">{insurance.notes}</p>
-                    )}
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(insurance.sum_assured)}</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Premium: {formatCurrency(insurance.premium)}/{insurance.premium_frequency === 'monthly' ? 'mo' : 'yr'}</p>
-                  </div>
-                  <div className="flex gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => openModal(insurance)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(insurance.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <ItemTile
+                key={insurance.id}
+                icon={typeInfo.icon}
+                iconColor={typeInfo.color}
+                title={insurance.policy_name}
+                subtitle={`${typeInfo.label} • ${insurance.provider}`}
+                badges={expiryStatus.label && (
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${expiryStatus.color}`}>
+                    {expiryStatus.label}
+                  </span>
+                )}
+                itemLabel={insurance.policy_name}
+                onEdit={() => openModal(insurance)}
+                onDelete={() => handleDelete(insurance.id)}
+                amountLabel="Sum assured"
+                amount={formatCurrency(insurance.sum_assured)}
+                amountValue={insurance.sum_assured}
+                privacyMode={privacyMode}
+                footer={<>Premium: {formatCurrency(insurance.premium)}/{insurance.premium_frequency === 'monthly' ? 'mo' : 'yr'}</>}
+              >
+                {insurance.policy_number && (
+                  <p className="truncate" title={insurance.policy_number}>Policy: {insurance.policy_number}</p>
+                )}
+                {insurance.notes && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 line-clamp-3" title={insurance.notes}>{insurance.notes}</p>
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}

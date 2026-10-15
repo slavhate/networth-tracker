@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { equitiesAPI, exchangeAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import { formatShortINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import { 
   Plus, 
@@ -267,8 +268,9 @@ export default function Equities() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalInvestedINR} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalInvestedINR) : undefined}
                 />
               </p>
               <p className="text-xs text-blue-200 mt-0.5">All markets in INR</p>
@@ -286,8 +288,9 @@ export default function Equities() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalCurrentValueINR} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalCurrentValueINR) : undefined}
                 />
               </p>
               <p className="text-xs text-green-200 mt-0.5">USD @ ₹{usdToInr.toFixed(2)}</p>
@@ -307,8 +310,9 @@ export default function Equities() {
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={Math.abs(totalGainLossINR)} 
-                  formatter={formatCurrencyRaw}
+                  formatter={formatShortINR}
                   privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(Math.abs(totalGainLossINR)) : undefined}
                 />
               </p>
             </div>

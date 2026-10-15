@@ -57,3 +57,14 @@ export function amountInWords(value) {
   if (!tier) return '';
   return `${n < 0 ? '-' : ''}₹${UNIT_FORMAT.format(amount)} ${tier.word}`;
 }
+
+const FULL_INR = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+
+// A headline figure: "₹1.25 Crore", "₹12.5 Lakh"; below ₹1 lakh the full amount ("₹85,000"), already short;
+// a non-number gives "—"
+export function formatShortINR(value) {
+  const n = toNumber(value);
+  if (n === null) return '—';
+  const { tier } = split(Math.abs(n));
+  return tier && tier.short !== 'K' ? amountInWords(n) : FULL_INR.format(Math.round(n) || 0);
+}
