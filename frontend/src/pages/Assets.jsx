@@ -14,7 +14,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { errorMessage } from '../utils/errors';
-import { todayIso, formatDate } from '../utils/dates';
+import { todayIso, formatDate, daysUntil } from '../utils/dates';
 import { ASSET_CATEGORIES, assetCategoryInfo } from '../utils/assetCategories';
 
 // Suggested yearly change when a category is picked; the user can change or clear it.
@@ -57,6 +57,7 @@ export default function Assets() {
   // already passed keep the contribution they were credited with. Once the user sets the balance or its date
   // themselves ('typed'), theirs stands.
   const [anchorState, setAnchorState] = useState('stored');
+  const [dateChosen, setDateChosen] = useState(false); // the date field was set in this form
   const [error, setError] = useState('');
   const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
   const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
@@ -154,6 +155,7 @@ export default function Assets() {
       setInterestTouched(false);
     }
     setAnchorState('stored');
+    setDateChosen(false);
     setError('');
     setModalOpen(true);
   };
@@ -179,6 +181,18 @@ export default function Assets() {
     const q = parseFloat(formData.quantity);
     const p = parseFloat(formData.unit_price);
     return q > 0 && p >= 0 ? Math.round(q * p * 100) / 100 : null;
+  })();
+  const isVehicle = formData.category === 'vehicles';
+  const isProperty = formData.category === 'real_estate';
+  // Assets usually entered at what was paid and when, then moved by the yearly change
+  const isPurchase = isVehicle || isProperty;
+  // Today's value as the server works it out: value × (1 + rate) ^ (days since the date / 365.25)
+  const valueToday = (() => {
+    const value = parseFloat(formData.value);
+    const rate = parseFloat(formData.annual_change_rate);
+    const daysAgo = -daysUntil(formData.valuation_date);
+    if (!(value > 0) || !Number.isFinite(rate) || !(daysAgo > 0)) return null;
+    return value * (1 + rate / 100) ** (daysAgo / 365.25);
   })();
   const editingProvident = editingAsset != null && assetCategoryInfo(editingAsset.category).kind === 'provident';
 
@@ -455,7 +469,7 @@ export default function Assets() {
               {!kind && (
                 <>
                   <div>
-                    <label className="label">Value (₹)</label>
+                    <label className="label">{isPurchase ? 'Purchase price (₹)' : 'Value (₹)'}</label>
                     <input
                       type="number"
                       className="input"
@@ -465,7 +479,7 @@ export default function Assets() {
                       value={formData.value}
                       onChange={(e) => {
                         setAnchorState('typed');
-                        setFormData({ ...formData, value: e.target.value, valuation_date: todayIso() });
+                        setFormData({ ...formData, value: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() });
                       }}
                       required
                     />
@@ -473,13 +487,14 @@ export default function Assets() {
                   </div>
 
                   <div>
-                    <label className="label">Value as of</label>
+                    <label className="label">{isPurchase ? 'Purchase date' : 'Value as of'}</label>
                     <input
                       type="date"
                       className="input"
                       value={formData.valuation_date}
                       onChange={(e) => {
                         setAnchorState('typed');
+                        setDateChosen(true);
                         setFormData({ ...formData, valuation_date: e.target.value });
                       }}
                     />
@@ -500,7 +515,7 @@ export default function Assets() {
                       value={formData.value}
                       onChange={(e) => {
                         setAnchorState('typed');
-                        setFormData({ ...formData, value: e.target.value, valuation_date: todayIso() });
+                        setFormData({ ...formData, value: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() });
                       }}
                       required
                     />
@@ -515,6 +530,7 @@ export default function Assets() {
                       value={formData.valuation_date}
                       onChange={(e) => {
                         setAnchorState('typed');
+                        setDateChosen(true);
                         setFormData({ ...formData, valuation_date: e.target.value });
                       }}
                     />
@@ -591,6 +607,7 @@ export default function Assets() {
                       value={formData.valuation_date}
                       onChange={(e) => {
                         setAnchorState('typed');
+                        setDateChosen(true);
                         setFormData({ ...formData, valuation_date: e.target.value });
                       }}
                     />
@@ -659,7 +676,7 @@ export default function Assets() {
                       min="0.0001"
                       step="any"
                       value={formData.quantity}
-                      onChange={(e) => setFormData({ ...formData, quantity: e.target.value, valuation_date: todayIso() })}
+                      onChange={(e) => setFormData({ ...formData, quantity: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() })}
                       required
                     />
                   </div>
@@ -673,7 +690,7 @@ export default function Assets() {
                       min="0"
                       step="any"
                       value={formData.unit_price}
-                      onChange={(e) => setFormData({ ...formData, unit_price: e.target.value, valuation_date: todayIso() })}
+                      onChange={(e) => setFormData({ ...formData, unit_price: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() })}
                       required
                     />
                   </div>
@@ -686,6 +703,7 @@ export default function Assets() {
                       value={formData.valuation_date}
                       onChange={(e) => {
                         setAnchorState('typed');
+                        setDateChosen(true);
                         setFormData({ ...formData, valuation_date: e.target.value });
                       }}
                     />
@@ -718,8 +736,15 @@ export default function Assets() {
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                     {kind === 'nps'
                       ? "Used for the balance and contributions while NAVs aren't available."
-                      : 'The value is adjusted every day at this yearly rate, starting from the date above.'}
+                      : isVehicle
+                        ? 'The value goes down every day at this yearly rate from the purchase date. 15% a year on the reducing value is the Income-tax depreciation rate for cars.'
+                        : isProperty
+                          ? 'The value grows every day at this yearly rate from the purchase date. Use a rate that fits your area; you can also enter a recent valuation and its date instead.'
+                          : 'The value is adjusted every day at this yearly rate, starting from the date above.'}
                   </p>
+                  {valueToday != null && (
+                    <p className="text-xs text-gray-600 dark:text-gray-300 mt-1">Value today ≈ {formatShortINR(valueToday)}</p>
+                  )}
                 </div>
               )}
 
