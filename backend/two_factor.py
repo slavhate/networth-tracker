@@ -1,6 +1,6 @@
 """TOTP two-factor authentication helpers. Pure functions: no I/O.
 
-`now` is naive UTC (datetime.utcnow()) throughout the app.
+`now` is naive UTC (UTC wall time without tzinfo) throughout the app.
 """
 import hashlib
 import hmac

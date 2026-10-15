@@ -27,7 +27,6 @@ __pycache__/
 .Python
 venv/
 ENV/
-.env
 
 # Data (keep structure, ignore actual data for git)
 data/*.json

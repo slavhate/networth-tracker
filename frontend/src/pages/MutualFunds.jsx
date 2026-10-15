@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { mutualFundsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
 import { 
   Plus, 
   Edit2, 
@@ -86,23 +88,40 @@ export default function MutualFunds() {
   // from today by the server, which folds the installments so far into the units and invested amount.)
   const [currentValueTouched, setCurrentValueTouched] = useState(false);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
   const backgroundRefresh = useRef(false);
   const openFundId = useRef(null); // the fund the edit form is open on, read by the background refresh
+  // The fund the background SIP refresh is writing right now; saving that fund waits for it (else the save gets a 409)
+  const [sipRefreshingId, setSipRefreshingId] = useState(null);
 
-  const fetchFunds = async (refresh = false) => {
+  // Only the latest list request may update the page: a slow NAV refresh that started before an edit or delete
+  // must not overwrite the newer list when it finally lands.
+  const fetchSeq = useRef(0);
+
+  // quiet: reload without the full-page spinner (which would hide an open edit form)
+  const fetchFunds = async (refresh = false, { quiet = false } = {}) => {
+    const requestId = ++fetchSeq.current;
+    const isLatest = () => requestId === fetchSeq.current;
     try {
       if (refresh) setRefreshing(true);
-      else setLoading(true);
+      else if (!quiet) setLoading(true);
       const response = await mutualFundsAPI.getAll(refresh);
+      if (!isLatest()) return;
       setFunds(response.data);
+      setLoaded(true);
+      setPageError(null);
       if (!refresh) refreshStaleSips(response.data);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load mutual funds');
+      if (!isLatest()) return;
+      setPageError({ message: errorMessage(err, 'Failed to load mutual funds'), retry: true });
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isLatest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -115,7 +134,11 @@ export default function MutualFunds() {
     try {
       for (const fund of list) {
         if (!(fund.sip_amount > 0) || fund.sip_priced_through === todayIso()) continue;
+        // A fund open in the edit form is left alone: refreshing it on the server while the user edits it would
+        // make their save fail with a conflict (409). The next load prices it.
+        if (openFundId.current === fund.id) continue;
         try {
+          setSipRefreshingId(fund.id);
           const response = await mutualFundsAPI.refreshNav(fund.id);
           const refreshed = response.data.fund;
           if (response.data.status === 'success' && refreshed && openFundId.current !== fund.id) {
@@ -129,6 +152,7 @@ export default function MutualFunds() {
       }
     } finally {
       backgroundRefresh.current = false;
+      setSipRefreshingId(null);
     }
   };
 
@@ -177,6 +201,8 @@ export default function MutualFunds() {
   };
 
   const editingSip = editingFund != null && editingFund.sip_amount > 0;
+  // The form was opened while the background refresh was already writing this fund: save once it has finished
+  const waitingForSipRefresh = editingFund != null && sipRefreshingId === editingFund.id;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -214,7 +240,15 @@ export default function MutualFunds() {
       closeModal();
       fetchFunds();
     } catch (err) {
-      setError(errorMessage(err, 'Failed to save mutual fund'));
+      const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 409 && typeof detail === 'string' && detail.includes('changed while')) {
+        // The fund was rewritten on the server (a NAV refresh) while this save fetched NAVs. Reload the list in place
+        // and keep the form open with the user's values, so saving again applies them to the fresh copy.
+        setError('The fund was updated in the background; your list is refreshed — please re-apply your change and save again.');
+        fetchFunds(false, { quiet: true });
+      } else {
+        setError(errorMessage(err, 'Failed to save mutual fund'));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -227,7 +261,7 @@ export default function MutualFunds() {
       await mutualFundsAPI.delete(id);
       fetchFunds();
     } catch (err) {
-      setError('Failed to delete mutual fund');
+      setPageError({ message: errorMessage(err, 'Failed to delete mutual fund'), retry: false });
     }
   };
 
@@ -286,6 +320,12 @@ export default function MutualFunds() {
         </div>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? () => fetchFunds() : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card bg-gradient-to-r from-blue-500 to-blue-600 text-white">
@@ -296,7 +336,7 @@ export default function MutualFunds() {
                 <AnimatedNumber 
                   value={totalInvested} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -314,7 +354,7 @@ export default function MutualFunds() {
                 <AnimatedNumber 
                   value={totalCurrentValue} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -332,7 +372,7 @@ export default function MutualFunds() {
                 <AnimatedNumber 
                   value={Math.abs(totalReturns)} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -350,6 +390,7 @@ export default function MutualFunds() {
                 <AnimatedNumber 
                   value={overallReturnPercent} 
                   formatter={(v) => formatPercent(v)}
+                  privacyMask={loaded ? null : '—'}
                 />
               </p>
             </div>
@@ -361,7 +402,7 @@ export default function MutualFunds() {
       </div>
 
       {/* Funds List */}
-      {funds.length === 0 ? (
+      {funds.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <TrendingUp className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white">No mutual funds yet</h3>
@@ -410,17 +451,17 @@ export default function MutualFunds() {
                       </span>
                       {units > 0 && (
                         <span className="text-gray-500 dark:text-gray-400">
-                          Units: <span className="text-gray-900 dark:text-white font-medium">{units.toFixed(3)}</span>
+                          Units: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '••' : units.toFixed(3)}</span>
                         </span>
                       )}
                       {fund.avg_nav > 0 && !(fund.sip_amount > 0) && (
                         <span className="text-gray-500 dark:text-gray-400">
-                          Avg NAV: <span className="text-gray-900 dark:text-white font-medium">₹{fund.avg_nav.toFixed(2)}</span>
+                          Avg NAV: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '₹ ••' : `₹${fund.avg_nav.toFixed(2)}`}</span>
                         </span>
                       )}
                       {fund.current_nav > 0 && (
                         <span className="text-gray-500 dark:text-gray-400">
-                          Current NAV: <span className="text-green-600 dark:text-green-400 font-medium">₹{fund.current_nav.toFixed(2)}</span>
+                          Current NAV: <span className="text-green-600 dark:text-green-400 font-medium">{privacyMode ? '₹ ••' : `₹${fund.current_nav.toFixed(2)}`}</span>
                         </span>
                       )}
                     </div>
@@ -532,6 +573,7 @@ export default function MutualFunds() {
                     onChange={(e) => setFormData({ ...formData, invested_amount: e.target.value })}
                     required
                   />
+                  <AmountHint value={formData.invested_amount} />
                 </div>
                 <div>
                   <label className="label">Current Value (₹) <span className="text-gray-400 font-normal">- Optional</span></label>
@@ -547,6 +589,7 @@ export default function MutualFunds() {
                       setFormData({ ...formData, current_value: e.target.value });
                     }}
                   />
+                  <AmountHint value={formData.current_value} />
                 </div>
               </div>
 
@@ -596,6 +639,7 @@ export default function MutualFunds() {
                       value={formData.sip_amount}
                       onChange={(e) => setFormData({ ...formData, sip_amount: e.target.value })}
                     />
+                    <AmountHint value={formData.sip_amount} />
                   </div>
                   <div>
                     <label className="label">Frequency</label>
@@ -683,8 +727,8 @@ export default function MutualFunds() {
                 <button type="button" onClick={closeModal} className="btn-secondary flex-1">
                   Cancel
                 </button>
-                <button type="submit" disabled={submitting} className="btn-primary flex-1">
-                  {submitting ? 'Saving...' : (editingFund ? 'Update' : 'Add Fund')}
+                <button type="submit" disabled={submitting || waitingForSipRefresh} className="btn-primary flex-1">
+                  {submitting ? 'Saving...' : waitingForSipRefresh ? 'Updating NAV...' : (editingFund ? 'Update' : 'Add Fund')}
                 </button>
               </div>
             </form>

@@ -10,6 +10,7 @@ import {
   exchangeAPI,
 } from '../api';
 import { DEFAULT_USD_TO_INR, isUsdMarket } from './markets';
+import { amountInWords } from './indianNumbers';
 import { categoryLabel } from './assetCategories';
 import { ASSET_CLASSES, assetClassLabel } from './assetClasses';
 
@@ -48,6 +49,13 @@ function fmtNum(value, decimals = 2) {
   }).format(value);
 }
 
+// Units, quantities and per-unit prices: hidden in a private report, since units x price gives the value
+const NUM_MASK = '••';
+
+function fmtNumPrivate(value, isPrivate, decimals = 2) {
+  return isPrivate ? NUM_MASK : fmtNum(value, decimals);
+}
+
 function fmtCat(str) {
   if (!str) return '—';
   return escapeHtml(str.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
@@ -62,7 +70,8 @@ function fmtAccountType(type) {
 function maskAccount(accountNumber) {
   if (!accountNumber) return '—';
   const s = String(accountNumber);
-  return '••••' + s.slice(-4);
+  // A number of 4 characters or fewer would be shown whole
+  return s.length <= 4 ? '••••' : '••••' + s.slice(-4);
 }
 
 function sumField(arr, key) {
@@ -97,6 +106,7 @@ function buildCSS() {
     .summary-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
     .summary-card .label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #64748b; }
     .summary-card .value { font-size: 17px; font-weight: 700; color: #1e293b; margin-top: 6px; word-break: break-all; }
+    .summary-card .words { font-size: 11px; color: #64748b; margin-top: 2px; }
 
     .goal-card { border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin-bottom: 36px; background: #eff6ff; }
     .goal-card .section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #3b82f6; margin-bottom: 8px; }
@@ -150,6 +160,12 @@ function buildHeader(dateStr) {
     </div>`;
 }
 
+// The amount in lakh/crore words under a full amount (e.g. ₹12.5 Lakh); nothing in a private report or below ₹1,000
+function wordsLine(value, isPrivate) {
+  const words = isPrivate ? '' : amountInWords(value);
+  return words ? `<div class="words">${escapeHtml(words)}</div>` : '';
+}
+
 function buildSummaryCards(metrics, isPrivate) {
   const ratio = metrics.debt_to_asset_ratio != null
     ? metrics.debt_to_asset_ratio.toFixed(1) + '%'
@@ -159,14 +175,17 @@ function buildSummaryCards(metrics, isPrivate) {
       <div class="summary-card">
         <div class="label">Net Worth</div>
         <div class="value">${fmt(metrics.net_worth, isPrivate)}</div>
+        ${wordsLine(metrics.net_worth, isPrivate)}
       </div>
       <div class="summary-card">
         <div class="label">Total Assets</div>
         <div class="value">${fmt(metrics.total_assets, isPrivate)}</div>
+        ${wordsLine(metrics.total_assets, isPrivate)}
       </div>
       <div class="summary-card">
         <div class="label">Total Liabilities</div>
         <div class="value">${fmt(metrics.total_liabilities, isPrivate)}</div>
+        ${wordsLine(metrics.total_liabilities, isPrivate)}
       </div>
       <div class="summary-card">
         <div class="label">Debt-to-Asset Ratio</div>
@@ -185,7 +204,7 @@ function buildGoalCard(goal, netWorth, isPrivate) {
     <div class="goal-card">
       <div class="section-label">Net Worth Goal</div>
       <div class="goal-name">${escapeHtml(goal.name) || 'Net Worth Goal'}</div>
-      <div class="goal-meta">Target: ${fmt(target, isPrivate)} &nbsp;·&nbsp; Current: ${fmt(netWorth, isPrivate)}</div>
+      <div class="goal-meta">Target: ${fmt(target, isPrivate)}${!isPrivate && amountInWords(target) ? ` (${escapeHtml(amountInWords(target))})` : ''} &nbsp;·&nbsp; Current: ${fmt(netWorth, isPrivate)}${!isPrivate && amountInWords(netWorth) ? ` (${escapeHtml(amountInWords(netWorth))})` : ''}</div>
       <div class="progress-bg"><div class="progress-fill" style="width:${barWidth}%"></div></div>
       <div class="progress-pct">${pctLabel} complete</div>
     </div>`;
@@ -301,9 +320,9 @@ function buildMutualFundsSection(funds, isPrivate) {
     : funds.map((f) => `
         <tr>
           <td>${escapeHtml(f.fund_name)}</td>
-          <td class="num">${fmtNum(f.units, 3)}</td>
-          <td class="num">${fmtNum(f.avg_nav)}</td>
-          <td class="num">${f.current_nav != null ? fmtNum(f.current_nav) : '—'}</td>
+          <td class="num">${fmtNumPrivate(f.units, isPrivate, 3)}</td>
+          <td class="num">${fmtNumPrivate(f.avg_nav, isPrivate)}</td>
+          <td class="num">${isPrivate ? NUM_MASK : f.current_nav != null ? fmtNum(f.current_nav) : '—'}</td>
           <td class="num">${fmt(f.current_value != null ? f.current_value : f.invested_amount, isPrivate)}</td>
         </tr>`).join('') + `
         <tr class="total">
@@ -332,9 +351,9 @@ function buildEquitiesSection(equities, usdToInr, isPrivate) {
             ${e.company_name ? `<br><small style="color:#64748b;font-size:11px">${escapeHtml(e.company_name)}</small>` : ''}
           </td>
           <td>${escapeHtml(e.market)}</td>
-          <td class="num">${e.quantity}</td>
-          <td class="num">${isUsd(e) ? fmtUsd(e.avg_buy_price, false) : fmtNum(e.avg_buy_price)}</td>
-          <td class="num">${e.current_price != null ? (isUsd(e) ? fmtUsd(e.current_price, false) : fmtNum(e.current_price)) : '—'}</td>
+          <td class="num">${isPrivate ? NUM_MASK : escapeHtml(e.quantity)}</td>
+          <td class="num">${isUsd(e) ? fmtUsd(e.avg_buy_price, isPrivate) : fmtNumPrivate(e.avg_buy_price, isPrivate)}</td>
+          <td class="num">${isPrivate ? NUM_MASK : e.current_price != null ? (isUsd(e) ? fmtUsd(e.current_price, false) : fmtNum(e.current_price)) : '—'}</td>
           <td class="num">
             ${fmt(valueInInr(e), isPrivate)}
             ${isUsd(e) ? `<br><small style="color:#64748b;font-size:11px">${fmtUsd(e.current_value, isPrivate)}</small>` : ''}

@@ -3,19 +3,33 @@ import { createContext, useContext, useState, useEffect } from 'react';
 const PrivacyContext = createContext(null);
 
 export function PrivacyProvider({ children }) {
+  // Storage can be unavailable or hold a corrupt value (manual edit, extension); fall back to defaults
   const [privacyMode, setPrivacyMode] = useState(() => {
-    const saved = localStorage.getItem('privacyMode');
-    // Default to true (privacy on) if not set
-    return saved !== null ? JSON.parse(saved) : true;
+    try {
+      const saved = JSON.parse(localStorage.getItem('privacyMode'));
+      // Default to true (privacy on) if not set
+      return typeof saved === 'boolean' ? saved : true;
+    } catch {
+      return true;
+    }
   });
 
   const [lastUpdated, setLastUpdated] = useState(() => {
-    const saved = localStorage.getItem('lastUpdated');
-    return saved ? new Date(saved) : null;
+    try {
+      const saved = localStorage.getItem('lastUpdated');
+      const date = saved ? new Date(saved) : null;
+      return date && !Number.isNaN(date.getTime()) ? date : null;
+    } catch {
+      return null;
+    }
   });
 
   useEffect(() => {
-    localStorage.setItem('privacyMode', JSON.stringify(privacyMode));
+    try {
+      localStorage.setItem('privacyMode', JSON.stringify(privacyMode));
+    } catch {
+      // storage unavailable - the choice just won't persist
+    }
   }, [privacyMode]);
 
   const togglePrivacyMode = () => setPrivacyMode(!privacyMode);
@@ -23,21 +37,17 @@ export function PrivacyProvider({ children }) {
   const updateLastUpdated = () => {
     const now = new Date();
     setLastUpdated(now);
-    localStorage.setItem('lastUpdated', now.toISOString());
-  };
-
-  // Mask function to hide financial values
-  const maskValue = (value, showAsText = false) => {
-    if (!privacyMode) return value;
-    if (showAsText) return '••••••';
-    return '₹ ••••••';
+    try {
+      localStorage.setItem('lastUpdated', now.toISOString());
+    } catch {
+      // storage unavailable
+    }
   };
 
   return (
-    <PrivacyContext.Provider value={{ 
-      privacyMode, 
-      togglePrivacyMode, 
-      maskValue,
+    <PrivacyContext.Provider value={{
+      privacyMode,
+      togglePrivacyMode,
       lastUpdated,
       updateLastUpdated
     }}>

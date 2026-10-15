@@ -4,7 +4,9 @@ import { useTheme } from '../ThemeContext';
 import { usePrivacy } from '../PrivacyContext';
 import { exportAPI } from '../api';
 import { generateReport } from '../utils/reportGenerator';
-import { downloadJson } from '../utils/download';
+import { downloadBlob, downloadJson } from '../utils/download';
+import { todayIso } from '../utils/dates';
+import { errorMessage } from '../utils/errors';
 import { looksLikeBackup } from '../utils/backup';
 import RestoreDialog from './RestoreDialog';
 import {
@@ -31,7 +33,7 @@ import {
   CheckCircle,
   Printer
 } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const formatLastUpdated = (date) => {
   if (!date) return 'Never';
@@ -67,9 +69,10 @@ export default function Layout() {
     try {
       setExporting(true);
       const response = await exportAPI.download();
-      downloadJson(response.data, `networth_backup_${new Date().toISOString().slice(0,10)}.json`);
+      // Named with the local date, like every other date in the app
+      downloadJson(response.data, `networth_backup_${todayIso()}.json`);
     } catch (err) {
-      console.error('Export failed:', err);
+      showRestoreResult(false, errorMessage(err, 'Backup failed. Please try again.'), 5000);
     } finally {
       setExporting(false);
     }
@@ -80,17 +83,9 @@ export default function Layout() {
       setReporting(true);
       setPrintError(null);
       const html = await generateReport(privacyMode);
-      const blob = new Blob([html], { type: 'text/html' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `networth-report-${new Date().toISOString().slice(0, 10)}.html`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Print report failed:', err);
+      // downloadBlob revokes the URL only after a delay, so the browser has finished with it
+      downloadBlob(new Blob([html], { type: 'text/html' }), `networth-report-${todayIso()}.html`);
+    } catch {
       setPrintError('Report generation failed. Please try again.');
       setTimeout(() => setPrintError(null), 4000);
     } finally {
@@ -102,9 +97,13 @@ export default function Layout() {
     fileInputRef.current?.click();
   };
 
-  const showRestoreResult = (success, message) => {
+  // One status message at a time: a new one restarts the timer instead of being cleared early by the previous timer
+  const resultTimer = useRef(null);
+  useEffect(() => () => clearTimeout(resultTimer.current), []);
+  const showRestoreResult = (success, message, duration = 3000) => {
+    clearTimeout(resultTimer.current);
     setRestoreResult({ success, message });
-    setTimeout(() => setRestoreResult(null), 3000);
+    resultTimer.current = setTimeout(() => setRestoreResult(null), duration);
   };
 
   const handleFileChange = async (e) => {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth, AccountCreatedError } from '../AuthContext';
 import { Eye, EyeOff } from 'lucide-react';
 import { errorMessage } from '../utils/errors';
 
@@ -12,6 +12,7 @@ export default function Register() {
     confirmPassword: '' 
   });
   const [error, setError] = useState('');
+  const [accountCreated, setAccountCreated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const { register } = useAuth();
@@ -19,7 +20,9 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // A new attempt starts clean, so the success and error boxes never show together
     setError('');
+    setAccountCreated(false);
 
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match');
@@ -41,6 +44,11 @@ export default function Register() {
       });
       navigate('/');
     } catch (err) {
+      if (err instanceof AccountCreatedError) {
+        // The account exists; retrying registration would only say "already registered"
+        setAccountCreated(true);
+        return;
+      }
       setError(errorMessage(err, 'Registration failed. Please try again.'));
     } finally {
       setLoading(false);
@@ -60,6 +68,13 @@ export default function Register() {
         {/* Form */}
         <div className="bg-white rounded-2xl shadow-xl p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
+            {accountCreated && (
+              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm" role="status">
+                Account created, but signing in failed. Please{' '}
+                <Link to="/login" className="font-medium underline">sign in</Link>.
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
                 {error}

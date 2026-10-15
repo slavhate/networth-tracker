@@ -186,7 +186,7 @@ docker run -d \
   --name networth-backend \
   --network networth-network \
   --network-alias backend \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -v ./data:/app/data \
   -e CREATE_DEMO_DATA=true \
   -e DATA_FILE=/app/data/data.json \
@@ -218,11 +218,12 @@ services:
     image: shri32msi/networth-tracker:backend
     container_name: networth-backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # this machine only; browsers reach the API through the frontend's nginx
     volumes:
       - ./data:/app/data
     environment:
-      - CREATE_DEMO_DATA=true
+      - CREATE_DEMO_DATA=false   # true: create a demo user with sample data
+      # - ALLOW_REGISTRATION=false   # once you have registered: nobody else can sign up
       # - DEMO_PASSWORD=   # optional; if unset, a random password is printed in the backend log
       - DATA_FILE=/app/data/data.json
       # Optional: set for persistent JWT sessions across restarts
@@ -248,7 +249,7 @@ networks:
 docker compose up -d
 ```
 
-Open http://localhost:3000 and log in as the demo user (**demo** by default, or your `DEMO_USERNAME`) with the password printed in the backend log (`docker logs networth-backend 2>&1 | grep "demo user"`) or the one you set in `DEMO_PASSWORD`. The password is only set when the demo user is first created: an existing data file keeps its password (change it in Settings).
+Open http://localhost:3000 and register an account. To look around with sample data first, set `CREATE_DEMO_DATA=true`, then log in as the demo user (**demo** by default, or your `DEMO_USERNAME`) with the password printed in the backend log (`docker logs networth-backend 2>&1 | grep "demo user"`) or the one you set in `DEMO_PASSWORD`. The password is only set when the demo user is first created: an existing data file keeps its password (change it in Settings).
 
 ## Quick Start (Build from Source)
 
@@ -266,10 +267,10 @@ Open http://localhost:3000 and log in as the demo user (**demo** by default, or 
 
 3. **Access the application:**
    - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8000
+   - Backend API: http://localhost:8000 (published on this machine only, 127.0.0.1)
    - API Docs: http://localhost:8000/docs
 
-4. **Demo login** (when `CREATE_DEMO_DATA=true`):
+4. **Demo login** (`docker-compose.yml` ships with `CREATE_DEMO_DATA=false`; set it to `true` for a demo user):
    - Username: `demo` (or your `DEMO_USERNAME`)
    - Password: the one printed in the backend log (`docker logs networth-backend 2>&1 | grep "demo user"`), or the one you set in `DEMO_PASSWORD`
 
@@ -367,8 +368,8 @@ networth-tracker/
 ### Authentication
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login and get token (returns a 2FA challenge when 2FA is on) |
+| POST | `/api/auth/register` | Register new user (403 when `ALLOW_REGISTRATION=false`) |
+| POST | `/api/auth/login` | Login and get token (returns a 2FA challenge when 2FA is on; 429 after too many failed attempts) |
 | POST | `/api/auth/login/2fa` | Complete a 2FA login with an authenticator or backup code |
 | GET | `/api/auth/me` | Get current user info |
 | GET | `/api/auth/2fa/status` | Whether 2FA is on and how many backup codes remain |
@@ -424,11 +425,11 @@ networth-tracker/
 | GET | `/api/mutual-funds` | List all mutual fund holdings |
 | POST | `/api/mutual-funds` | Create new mutual fund entry |
 | GET | `/api/mutual-funds/{id}` | Get mutual fund by ID |
-| PUT | `/api/mutual-funds/{id}` | Update mutual fund entry |
+| PUT | `/api/mutual-funds/{id}` | Update mutual fund entry (409 if the fund changed while its NAVs were being fetched) |
 | DELETE | `/api/mutual-funds/{id}` | Delete mutual fund entry |
 | POST | `/api/mutual-funds/{id}/refresh-nav` | Refresh NAV for specific fund (and price its SIP up to today) |
-| GET | `/api/nav/search?q={query}` | Search mutual funds by name |
-| GET | `/api/nav/test` | Test NAV service connectivity |
+| GET | `/api/nav/search?q={query}` | Search mutual funds by name (signed in; `q` up to 150 characters) |
+| GET | `/api/nav/test` | Test NAV service connectivity (signed in) |
 
 ### Equities (Stocks)
 | Method | Endpoint | Description |
@@ -472,13 +473,20 @@ The application uses a simple JSON file for data storage (`data/data.json`), mak
 
 ## Security
 
-- Passwords hashed using bcrypt
+- Passwords hashed using bcrypt (in a worker thread, so a login never holds up other requests); an unknown username takes as long to reject as a wrong password
+- Failed logins are limited in memory, within 15 minutes: 5 for one username from one client, 50 for one username from all clients together, and 20 from one client across all usernames. Past a limit the login answers `429 Too Many Requests` with a `Retry-After` header. Wrong 2FA codes count too, and a successful login clears the username's counts. The 5 is per client so that someone guessing from elsewhere can't lock you out with five requests; the looser total of 50 still stops a guesser spread over many addresses. An IPv6 client is counted by its /64, which a home or host usually gets whole. The counts reset when the backend restarts
+- The client address for these limits is the connecting address, except for a peer listed in `TRUSTED_PROXIES` (by default `172.16.0.0/12`, the range Docker gives bridge networks such as the compose network, where the bundled nginx runs): from such a proxy the backend takes its `X-Real-IP`, or else the nearest untrusted address in `X-Forwarded-For`. Anything else that reaches port 8000 is counted as itself, whatever headers it sends
+- Registration can be closed with `ALLOW_REGISTRATION=false` once your account exists
 - JWT tokens for stateless authentication (secret auto-generated or via env var)
 - CORS restricted to specific origins, methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`), and headers (`Authorization`, `Content-Type`)
 - Token expiration after 24 hours
 - Non-root container users
-- Nginx security headers (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy)
-- Restore upload size limit (10MB); every item is validated before anything is written
+- Nginx security headers on every response, static files included (`frontend/security-headers.conf`): `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, a `Permissions-Policy` that turns off camera, microphone, geolocation, payment and USB, and a `Content-Security-Policy` that allows scripts, styles, fonts, images and API calls from the app's own origin only (no inline or third-party scripts; inline styles are allowed for the charts, images may also be `data:` URLs; no plugins, no framing by other sites, forms post only to the app). nginx doesn't reveal its version (`server_tokens off`)
+- Restore upload size limit (10MB, read in chunks so a larger upload is turned away without being held in memory); every item is validated before anything is written
+- Text fields have length limits (notes and descriptions 2,000 characters, short labels 100) so no request can bloat the data file
+- The data file is created readable by its owner only (0600)
+- `docker-compose.yml` publishes the backend's port 8000 on 127.0.0.1 only; everything else goes through nginx
+- Stock prices from Yahoo Finance must be a finite number above zero (and within the amount limit) to be stored; anything else counts as unavailable
 - Every number must be finite and within sane limits (amounts up to 10^15), whether it is typed in or comes from a restored backup; asset valuation, loan balance and FD/RD start and maturity dates must be real calendar dates (YYYY-MM-DD)
 - Demo data opt-in via `CREATE_DEMO_DATA` environment variable; the demo user gets a random password (printed once in the backend log) unless you set `DEMO_PASSWORD`
 
@@ -500,8 +508,10 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
 ### Backend
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SECRET_KEY` | _(auto-generated)_ | JWT signing key. Set for persistent sessions across restarts |
-| `CREATE_DEMO_DATA` | `false` | Set to `true` to create demo user with sample data on startup |
+| `SECRET_KEY` | _(auto-generated)_ | JWT signing key. Set for persistent sessions across restarts; use at least 32 random characters (a shorter key logs a warning at startup). The auto-generated key is per process, so without `SECRET_KEY` run a single worker (no `uvicorn --workers`) |
+| `CREATE_DEMO_DATA` | `false` | Set to `true` to create demo user with sample data on startup (`docker-compose.yml` sets `false` too) |
+| `ALLOW_REGISTRATION` | `true` | Set to `false` to turn off sign-up (`POST /api/auth/register` returns 403); existing users can still log in |
+| `TRUSTED_PROXIES` | `172.16.0.0/12` | Comma-separated addresses or networks (CIDR) of reverse proxies whose `X-Real-IP` / `X-Forwarded-For` headers name the client, for the failed-login limits. The default is Docker's bridge-network range, which holds the bundled docker-compose nginx, so compose works as is. Narrow it to nginx's address if other containers or the Docker host can reach port 8000 (anything in the list can claim any client address), or set your proxy's address when you run the backend another way |
 | `DEMO_USERNAME` | `demo` | Username of the demo user |
 | `DEMO_PASSWORD` | _(random)_ | Password of the demo user. If unset, a random password is generated and printed once in the backend log. Only applied when the demo user is first created |
 | `DATA_FILE` | `../data/data.json` | Path to the JSON database file |
@@ -525,7 +535,7 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
      - SECRET_KEY=${SECRET_KEY}   # read from your shell or a .env file next to docker-compose.yml
    ```
 
-2. **Disable demo data** (remove or set `CREATE_DEMO_DATA=false`)
+2. **Disable demo data** (remove or set `CREATE_DEMO_DATA=false`) and, once you have registered, **close registration** with `ALLOW_REGISTRATION=false`
 
 3. **Build and run:**
    ```bash
@@ -533,6 +543,8 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
    ```
 
 4. **Configure reverse proxy** (nginx/traefik) for HTTPS
+
+   With another proxy in front of the bundled nginx, nginx sees that proxy as every request's address and passes it on in `X-Real-IP`, so all clients would share one failed-login count. Make nginx take the real client from the outer proxy: in the `server` block of `frontend/nginx.conf`, add `set_real_ip_from <outer proxy address or network>;` and `real_ip_header X-Forwarded-For;` (and `real_ip_recursive on;` if there are several proxies). nginx then puts the real client in `$remote_addr`, which it already sends as `X-Real-IP`. Have the outer proxy set `X-Forwarded-For` (nginx, traefik and Caddy do by default)
 
 ## License
 

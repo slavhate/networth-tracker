@@ -2,19 +2,25 @@
 Mutual Fund NAV Service - Fetches current NAV from mfapi.in (free API for Indian mutual funds)
 """
 import httpx
+import logging
 import time
+from collections import OrderedDict
 from datetime import date
 from typing import Optional, Dict, List, Tuple
 import re
 
 from nps_service import parse_history  # mfapi.in uses the same {"data": [{"date", "nav"}]} shape
 
+logger = logging.getLogger(__name__)
+
 # Cache for NAV data (scheme_code -> {nav, timestamp})
 _nav_cache: Dict[str, Dict] = {}
 # Cache for NAV history (scheme_code -> {data, timestamp})
 _history_cache: Dict[str, Dict] = {}
-# Cache for search results (search_term -> {results, timestamp})
-_search_cache: Dict[str, Dict] = {}
+# Cache for search results (search_term -> {results, timestamp}), least recently used first
+_search_cache: "OrderedDict[str, Dict]" = OrderedDict()
+MAX_SEARCH_CACHE_ENTRIES = 500  # search terms are user input: the oldest are dropped beyond this
+MAX_SEARCH_LENGTH = 150  # the longest fund name a fund can have (models.MutualFundBase.fund_name)
 
 # Cache duration in seconds (1 hour for NAV, 24 hours for search)
 NAV_CACHE_DURATION = 3600
@@ -27,19 +33,21 @@ async def search_mutual_fund(fund_name: str) -> List[Dict]:
     Returns list of matching funds with scheme codes.
     """
     # Clean up the fund name for searching
-    search_term = fund_name.strip().lower()
+    search_term = fund_name.strip().lower()[:MAX_SEARCH_LENGTH]
     
     # Check cache
     if search_term in _search_cache:
         cached = _search_cache[search_term]
         if time.time() - cached["timestamp"] < SEARCH_CACHE_DURATION:
+            _search_cache.move_to_end(search_term)
             return cached["results"]
     
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # mfapi.in search endpoint
+            # mfapi.in search endpoint. The name goes in as an encoded query parameter: an "&" or "#" in it
+            # (as in "Banking & PSU Debt") must stay part of the search, not end it
             response = await client.get(
-                f"https://api.mfapi.in/mf/search?q={fund_name}"
+                "https://api.mfapi.in/mf/search", params={"q": fund_name.strip()[:MAX_SEARCH_LENGTH]}
             )
             if response.status_code == 200:
                 results = response.json()
@@ -48,9 +56,12 @@ async def search_mutual_fund(fund_name: str) -> List[Dict]:
                     "results": results[:20],  # Limit to top 20 results
                     "timestamp": time.time()
                 }
+                _search_cache.move_to_end(search_term)
+                while len(_search_cache) > MAX_SEARCH_CACHE_ENTRIES:
+                    _search_cache.popitem(last=False)
                 return results[:20]
     except Exception as e:
-        print(f"Error searching mutual fund: {e}")
+        logger.warning("Error searching mutual fund: %s", e)
     
     return []
 
@@ -60,6 +71,10 @@ async def fetch_nav_by_scheme_code(scheme_code: str) -> Optional[Dict]:
     Fetch NAV for a specific scheme code from mfapi.in
     Returns {nav, date, scheme_name} or None
     """
+    # The code goes into the URL path: ASCII digits only, like an AMFI scheme code
+    scheme_code = str(scheme_code or "")
+    if not (scheme_code.isascii() and scheme_code.isdigit()):
+        return None
     # Check cache
     if scheme_code in _nav_cache:
         cached = _nav_cache[scheme_code]
@@ -88,7 +103,7 @@ async def fetch_nav_by_scheme_code(scheme_code: str) -> Optional[Dict]:
                     }
                     return result
     except Exception as e:
-        print(f"Error fetching NAV for scheme {scheme_code}: {e}")
+        logger.warning("Error fetching NAV for scheme %s: %s", scheme_code, e)
     
     return None
 

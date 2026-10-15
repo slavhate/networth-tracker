@@ -63,3 +63,36 @@ def test_the_temp_file_has_the_final_mode_before_any_data_is_written(data_file, 
     db.save_data({"users": []})
 
     assert modes_while_writing == [0o600]
+
+
+def test_a_new_data_file_is_readable_by_its_owner_only(data_file):
+    import database as db
+
+    old_umask = os.umask(0o022)  # the usual default, which would leave a plain new file world-readable
+    try:
+        db.save_data({"users": []})
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(os.stat(data_file).st_mode) == 0o600
+
+
+def test_a_leftover_temp_file_gets_the_owner_only_mode_before_any_data_is_written(data_file, monkeypatch):
+    import database as db
+
+    leftover = str(data_file) + ".tmp"  # left behind by a crash, with a wider mode
+    with open(leftover, "w") as f:
+        f.write("{}")
+    os.chmod(leftover, 0o644)
+    modes_while_writing = []
+    real_dump = json.dump
+
+    def spy(obj, f, **kwargs):
+        modes_while_writing.append(stat.S_IMODE(os.fstat(f.fileno()).st_mode))
+        return real_dump(obj, f, **kwargs)
+
+    monkeypatch.setattr(json, "dump", spy)
+    db.save_data({"users": []})
+
+    assert modes_while_writing == [0o600]
+    assert stat.S_IMODE(os.stat(data_file).st_mode) == 0o600

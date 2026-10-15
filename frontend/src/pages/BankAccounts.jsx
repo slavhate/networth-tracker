@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { bankAccountsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
 import { 
   Plus, 
   Edit2, 
@@ -45,8 +47,10 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
+// Show only the last 4 digits; a number of 4 characters or fewer would be shown whole, so it is masked fully
 const maskAccountNumber = (num) => {
-  if (!num || num.length < 4) return num;
+  if (!num) return num;
+  if (num.length <= 4) return '••••';
   return '••••' + num.slice(-4);
 };
 
@@ -58,6 +62,8 @@ export default function BankAccounts() {
   const [editingAccount, setEditingAccount] = useState(null);
   const [formData, setFormData] = useState(emptyForm);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
   const fetchAccounts = async () => {
@@ -65,9 +71,11 @@ export default function BankAccounts() {
       setLoading(true);
       const response = await bankAccountsAPI.getAll();
       setAccounts(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load bank accounts');
+      setPageError({ message: errorMessage(err, 'Failed to load bank accounts'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -149,7 +157,7 @@ export default function BankAccounts() {
       await bankAccountsAPI.delete(id);
       fetchAccounts();
     } catch (err) {
-      setError('Failed to delete bank account');
+      setPageError({ message: errorMessage(err, 'Failed to delete bank account'), retry: false });
     }
   };
 
@@ -182,6 +190,12 @@ export default function BankAccounts() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchAccounts : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Card */}
       <div className="card bg-gradient-to-r from-blue-500 to-blue-600 text-white">
         <div className="flex items-center justify-between">
@@ -191,10 +205,10 @@ export default function BankAccounts() {
               <AnimatedNumber 
                 value={totalBalance} 
                 formatter={formatCurrencyRaw}
-                privacyMask={privacyMode ? '₹ ••••••' : null}
+                privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
               />
             </p>
-            <p className="text-blue-100 text-sm mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
+            {loaded && <p className="text-blue-100 text-sm mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>}
           </div>
           <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
             <Landmark className="w-8 h-8" />
@@ -203,7 +217,7 @@ export default function BankAccounts() {
       </div>
 
       {/* Accounts List */}
-      {accounts.length === 0 ? (
+      {accounts.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <Landmark className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white">No bank accounts yet</h3>
@@ -346,6 +360,7 @@ export default function BankAccounts() {
                   onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
                   required
                 />
+                <AmountHint value={formData.balance} />
               </div>
 
               {DEPOSIT_TYPES.includes(formData.account_type) && (
@@ -356,6 +371,7 @@ export default function BankAccounts() {
                       <input type="number" className="input" placeholder="e.g., 5000" min="0.01" step="any"
                         value={formData.monthly_deposit}
                         onChange={(e) => setFormData({ ...formData, monthly_deposit: e.target.value })} />
+                      <AmountHint value={formData.monthly_deposit} />
                     </div>
                   )}
                   <div>

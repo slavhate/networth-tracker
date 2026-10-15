@@ -37,6 +37,10 @@ export default function RestoreDialog({ file, backup, onClose, onRestored }) {
   }, []);
 
   const handleReplace = async () => {
+    if (current === null
+      && !confirm("Your current data couldn't be loaded, so no copy of it will be saved. Replace it anyway?")) {
+      return;
+    }
     setError('');
     setRestoring(true);
     let restored;
@@ -55,7 +59,9 @@ export default function RestoreDialog({ file, backup, onClose, onRestored }) {
   };
 
   const loading = current === null && !loadFailed;
-  const canReplace = current !== null && !restoring;
+  // Without the current data a copy can't be saved first, but the restore itself is still allowed once the user
+  // has unchecked "Download my current data first"
+  const canReplace = !restoring && (current !== null || (loadFailed && !downloadFirst));
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
@@ -83,7 +89,8 @@ export default function RestoreDialog({ file, backup, onClose, onRestored }) {
 
           {loadFailed ? (
             <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-lg text-sm">
-              Couldn't load your current data
+              Couldn't load your current data, so it can't be downloaded first. Uncheck "Download my current data
+              first" to restore without a copy.
             </div>
           ) : (
             <table className="w-full text-sm">

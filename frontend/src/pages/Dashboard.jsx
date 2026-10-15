@@ -8,6 +8,8 @@ import { formatDate, formatMonthYear, todayIso } from '../utils/dates';
 import { categoryLabel } from '../utils/assetCategories';
 import { ASSET_CLASSES } from '../utils/assetClasses';
 import { snapshotFrequency } from '../utils/snapshotFrequencies';
+import { errorMessage } from '../utils/errors';
+import { formatCompactINR, amountInWords } from '../utils/indianNumbers';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -66,6 +68,7 @@ export default function Dashboard() {
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [goalInput, setGoalInput] = useState('');
   const [goalSaving, setGoalSaving] = useState(false);
+  const [goalError, setGoalError] = useState('');
   const [allocationView, setAllocationView] = useState(() => {
     try {
       return localStorage.getItem('allocationView') === 'holding' ? 'holding' : 'class';
@@ -122,25 +125,40 @@ export default function Dashboard() {
   };
 
   const openGoalModal = () => {
-    setGoalInput(goal?.target_amount ? (goal.target_amount / 10000000).toString() : '10');
+    // In privacy mode the current target is not pre-filled, so opening the dialog doesn't reveal it
+    const target = goal?.target_amount;
+    setGoalInput(privacyMode ? '' : target > 0 ? String(target / 10000000) : '10');
+    setGoalError('');
     setGoalModalOpen(true);
   };
 
+  const closeGoalModal = () => {
+    setGoalModalOpen(false);
+    setGoalError('');
+  };
+
   const handleGoalSave = async () => {
+    const crores = parseFloat(goalInput);
+    if (!Number.isFinite(crores) || crores <= 0) {
+      setGoalError('Enter a target greater than 0');
+      return;
+    }
     try {
       setGoalSaving(true);
-      const targetAmount = parseFloat(goalInput) * 10000000; // Convert crores to rupees
+      setGoalError('');
+      const targetAmount = Math.round(crores * 10000000); // Convert crores to whole rupees
       const response = await goalAPI.update({ target_amount: targetAmount });
       setGoal(response.data);
       setGoalModalOpen(false);
     } catch (err) {
-      setError('Failed to update goal');
+      // Shown inside the dialog; the dashboard stays as it is
+      setGoalError(errorMessage(err, 'Failed to update goal'));
     } finally {
       setGoalSaving(false);
     }
   };
 
-  if (loading) {
+  if (loading && !metrics) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -148,10 +166,15 @@ export default function Dashboard() {
     );
   }
 
-  if (error) {
+  // Nothing loaded yet: show the error with a way to try again
+  if (error && !metrics) {
     return (
-      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-        {error}
+      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex flex-wrap items-center justify-between gap-3" role="alert">
+        <span>{error}</span>
+        <button onClick={fetchDashboard} className="btn-secondary flex items-center gap-2">
+          <RefreshCw className="w-4 h-4" />
+          Retry
+        </button>
       </div>
     );
   }
@@ -166,8 +189,15 @@ export default function Dashboard() {
     return formatCurrencyRaw(value);
   };
 
-  // Value-axis tick, e.g. ₹250k; hidden in privacy mode like every other amount
-  const formatAxisAmount = (value) => (privacyMode ? '••' : `₹${(value / 1000).toFixed(0)}k`);
+  // Value-axis tick in lakh/crore, e.g. ₹4.5 L or ₹1.2 Cr; hidden in privacy mode like every other amount
+  // Non-breaking space: Recharts wraps tick labels at spaces ("₹1.05 Cr" would split over two lines)
+  const formatAxisAmount = (value) => (privacyMode ? '••' : formatCompactINR(value).replace(' ', '\u00A0'));
+
+  // The amount in words (₹12.5 Lakh, ₹1.25 Crore) under a full amount; nothing in privacy mode or below ₹1,000
+  const wordsCaption = (value, className = 'text-xs text-gray-400 dark:text-gray-500') => {
+    const words = privacyMode ? '' : amountInWords(value);
+    return words ? <p className={className}>{words}</p> : null;
+  };
 
   // Latest snapshot from an earlier calendar month (history is newest first)
   const thisMonth = todayIso().slice(0, 7);
@@ -220,9 +250,10 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={fetchDashboard}
+            disabled={loading}
             className="btn-secondary flex items-center gap-2"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
           <button
@@ -235,6 +266,16 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* A failed refresh keeps the last loaded figures on screen */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between gap-3" role="alert">
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="p-1 hover:bg-red-100 rounded" aria-label="Dismiss">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {snapshotDialogOpen && (
         <SnapshotDialog
@@ -256,11 +297,12 @@ export default function Dashboard() {
               <p className="text-sm font-medium text-gray-500">Net Worth</p>
               <p className={`text-2xl font-bold mt-1 ${netWorthPositive ? 'text-green-600' : 'text-red-600'}`}>
                 <AnimatedNumber 
-                  value={metrics?.net_worth || 0} 
+                  value={metrics?.net_worth || 0}
                   formatter={formatCurrencyRaw}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
+              {wordsCaption(metrics?.net_worth)}
               {netWorthChange != null && (
                 <p className={`text-xs mt-1 ${netWorthChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                   {netWorthChange >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(netWorthChange))}
@@ -290,6 +332,7 @@ export default function Dashboard() {
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
+              {wordsCaption(metrics?.total_assets)}
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{metrics?.asset_count || 0} assets</p>
             </div>
             <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900/50 rounded-xl flex items-center justify-center">
@@ -310,6 +353,7 @@ export default function Dashboard() {
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
+              {wordsCaption(metrics?.total_liabilities)}
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{metrics?.liability_count || 0} liabilities</p>
             </div>
             <div className="w-12 h-12 bg-orange-100 dark:bg-orange-900/50 rounded-xl flex items-center justify-center">
@@ -342,12 +386,18 @@ export default function Dashboard() {
 
       {/* Net Worth Goal Card */}
       {(() => {
-        const goalTarget = goal?.target_amount || 100000000;
+        // A stored target of 0 (or none) means no goal is set; nothing is measured against a made-up target
+        const goalTarget = goal?.target_amount > 0 ? goal.target_amount : 0;
+        const hasTarget = goalTarget > 0;
         const currentNetWorth = Math.max(0, metrics?.net_worth || 0);
-        const progress = Math.min((currentNetWorth / goalTarget) * 100, 100);
+        const progress = hasTarget ? Math.min((currentNetWorth / goalTarget) * 100, 100) : 0;
         const remaining = Math.max(0, goalTarget - currentNetWorth);
-        const goalInCrores = (goalTarget / 10000000).toFixed(1);
-        
+        // "₹10 Crore", "₹50 Lakh"; a target under ₹1,000 has no words form and is shown in full
+        const goalInWords = amountInWords(goalTarget) || formatCurrencyRaw(goalTarget);
+        // Target x progress gives net worth, so privacy mode hides both (and everything derived from progress)
+        const showProgress = hasTarget && !privacyMode;
+        const shownProgress = showProgress ? progress : 0;
+
         // Milestones
         const milestones = [
           { percent: 25, label: '25%' },
@@ -377,9 +427,13 @@ export default function Dashboard() {
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <p className="text-white/80 text-sm">Target: ₹{goalInCrores} Crore</p>
+                  <p className="text-white/80 text-sm">
+                    Target: {!hasTarget ? 'not set' : privacyMode ? '₹ ••' : goalInWords}
+                  </p>
                   <p className="text-white/60 text-xs mt-0.5">
-                    {achievedMilestones > 0 ? `${achievedMilestones} milestone${achievedMilestones > 1 ? 's' : ''} achieved` : 'Start your journey'}
+                    {!hasTarget ? 'Set a target to track progress'
+                      : privacyMode ? 'Progress hidden'
+                      : achievedMilestones > 0 ? `${achievedMilestones} milestone${achievedMilestones > 1 ? 's' : ''} achieved` : 'Start your journey'}
                   </p>
                 </div>
               </div>
@@ -388,18 +442,19 @@ export default function Dashboard() {
               <div className="lg:col-span-6">
                 <div className="flex justify-between text-sm mb-2">
                   <span className="text-white/80">Progress</span>
-                  <span className="font-bold text-lg">{progress.toFixed(1)}%</span>
+                  <span className="font-bold text-lg">{showProgress ? `${progress.toFixed(1)}%` : '••'}</span>
                 </div>
                 {/* Progress bar with milestone markers */}
                 <div className="relative">
                   <div className="w-full bg-white/20 rounded-full h-5 overflow-hidden">
-                    <div 
+                    <div
                       className="h-full bg-gradient-to-r from-white/90 to-white rounded-full transition-all duration-500 ease-out relative"
-                      style={{ width: `${progress}%` }}
+                      style={{ width: `${shownProgress}%` }}
                     >
-                      {progress > 5 && (
-                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-purple-600 text-xs font-bold">
-                          {formatCurrency(currentNetWorth)}
+                      {shownProgress > 5 && (
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-purple-600 text-xs font-bold whitespace-nowrap">
+                          {/* Short form: the full amount doesn't fit inside a narrow bar */}
+                          {formatCompactINR(currentNetWorth)}
                         </span>
                       )}
                     </div>
@@ -412,7 +467,7 @@ export default function Dashboard() {
                         className="absolute top-0 h-full flex flex-col items-center"
                         style={{ left: `${m.percent}%`, transform: 'translateX(-50%)' }}
                       >
-                        <div className={`w-1 h-full ${progress >= m.percent ? 'bg-white/60' : 'bg-white/30'}`} />
+                        <div className={`w-1 h-full ${shownProgress >= m.percent ? 'bg-white/60' : 'bg-white/30'}`} />
                       </div>
                     ))}
                   </div>
@@ -422,7 +477,7 @@ export default function Dashboard() {
                   {milestones.map((m) => (
                     <span 
                       key={m.percent}
-                      className={`absolute text-xs transform -translate-x-1/2 ${progress >= m.percent ? 'text-white font-medium' : 'text-white/50'}`}
+                      className={`absolute text-xs transform -translate-x-1/2 ${shownProgress >= m.percent ? 'text-white font-medium' : 'text-white/50'}`}
                       style={{ left: `${m.percent}%` }}
                     >
                       {m.label}
@@ -437,18 +492,21 @@ export default function Dashboard() {
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Current</p>
                     <p className="font-bold text-sm mt-0.5">{formatCurrency(currentNetWorth)}</p>
+                    {wordsCaption(currentNetWorth, 'text-white/60 text-xs')}
                   </div>
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Remaining</p>
-                    <p className="font-bold text-sm mt-0.5">{formatCurrency(remaining)}</p>
+                    <p className="font-bold text-sm mt-0.5">{hasTarget ? formatCurrency(remaining) : '—'}</p>
+                    {hasTarget && wordsCaption(remaining, 'text-white/60 text-xs')}
                   </div>
                 </div>
-                {progress < 100 && (
+                {showProgress && progress < 100 && (
                   <p className="text-white/60 text-xs text-center mt-2">
-                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> ({formatCurrency(goalTarget * nextMilestone.percent / 100)})
+                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> ({formatCurrency(goalTarget * nextMilestone.percent / 100)}
+                    {amountInWords(goalTarget * nextMilestone.percent / 100) && ` · ${amountInWords(goalTarget * nextMilestone.percent / 100)}`})
                   </p>
                 )}
-                {progress >= 100 && (
+                {showProgress && progress >= 100 && (
                   <p className="text-white text-xs text-center mt-2 font-medium">
                     Goal Achieved! Set a new target.
                   </p>
@@ -465,7 +523,7 @@ export default function Dashboard() {
           <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-sm">
             <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Set Net Worth Goal</h2>
-              <button onClick={() => setGoalModalOpen(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
+              <button onClick={closeGoalModal} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -482,11 +540,18 @@ export default function Dashboard() {
                   onChange={(e) => setGoalInput(e.target.value)}
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  = {formatCurrency(parseFloat(goalInput || 0) * 10000000)}
+                  = {formatCurrency(Math.round(parseFloat(goalInput || 0) * 10000000) || 0)}
+                  {!privacyMode && amountInWords(Math.round(parseFloat(goalInput) * 10000000))
+                    && ` (${amountInWords(Math.round(parseFloat(goalInput) * 10000000))})`}
                 </p>
               </div>
+              {goalError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm" role="alert">
+                  {goalError}
+                </div>
+              )}
               <div className="flex gap-3 pt-4">
-                <button onClick={() => setGoalModalOpen(false)} className="btn-secondary flex-1">
+                <button onClick={closeGoalModal} className="btn-secondary flex-1">
                   Cancel
                 </button>
                 <button onClick={handleGoalSave} disabled={goalSaving || !goalInput} className="btn-primary flex-1">
@@ -626,7 +691,7 @@ export default function Dashboard() {
               <LineChart data={historyData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={formatAxisAmount} />
+                <YAxis tickFormatter={formatAxisAmount} width={72} />
                 <Tooltip formatter={(value) => formatCurrency(value)} />
                 <Legend />
                 <Line
@@ -678,7 +743,7 @@ export default function Dashboard() {
               <AreaChart data={allocationHistory}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={formatAxisAmount} />
+                <YAxis tickFormatter={formatAxisAmount} width={72} />
                 <Tooltip formatter={(value) => formatCurrency(value)} />
                 <Legend />
                 {plottedClasses.map((c) => (

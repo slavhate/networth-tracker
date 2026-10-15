@@ -1,8 +1,9 @@
 import json
+import math
 import os
-import shutil
+import stat
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from config import settings
 
@@ -49,9 +50,15 @@ def save_data(data: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(data_file), exist_ok=True)
     tmp_file = data_file + ".tmp"
     try:
-        with open(tmp_file, 'w') as f:
-            if os.path.exists(data_file):
-                shutil.copymode(data_file, tmp_file)  # permissions first, so the data is never readable more widely
+        # The file holds password hashes and 2FA secrets: a new one is readable by its owner only, an existing one
+        # keeps its mode. The mode is set before anything is written (O_CREAT's mode doesn't apply to a temp file
+        # left over from a crash), so the data is never readable more widely.
+        mode = stat.S_IMODE(os.stat(data_file).st_mode) if os.path.exists(data_file) else 0o600
+        with os.fdopen(os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+            if hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
+            else:  # Windows before Python 3.13
+                os.chmod(tmp_file, mode)
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -67,7 +74,7 @@ def generate_id() -> str:
 
 def get_timestamp() -> str:
     """Get current timestamp as ISO string"""
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 # Row builders shared by the create_* helpers and replace_user_data
 def _new_row(user_id: str, fields: Dict) -> Dict:
@@ -95,7 +102,7 @@ def _equity_numbers(quantity: float, avg_price: float, current_price: float) -> 
 ASSET_CLEARABLE = frozenset({"description", "annual_change_rate", "valuation_date", "monthly_contribution",
                              "interest_rate", "quantity", "unit_price", "yearly_contribution",
                              "yearly_contribution_month", "nps_schemes", "nps_priced_through"})
-LIABILITY_CLEARABLE = frozenset({"interest_rate", "description", "emi", "balance_date", "tenure_months"})
+LIABILITY_CLEARABLE = frozenset({"interest_rate", "description", "emi", "balance_date", "tenure_months", "emi_day"})
 BANK_ACCOUNT_CLEARABLE = frozenset({"branch", "ifsc_code", "interest_rate", "start_date", "maturity_date",
                                     "monthly_deposit"})
 MUTUAL_FUND_CLEARABLE = frozenset({"sip_amount", "sip_frequency", "sip_day", "sip_start_date", "sip_end_date",
@@ -389,15 +396,28 @@ def delete_mutual_fund(fund_id: str, user_id: str) -> bool:
     return False
 
 # Equity operations
+_EQUITY_NUMBERS = ("current_price", "invested_amount", "current_value", "gain_loss", "gain_loss_percent")
+
+def _readable_equity(equity: Dict) -> Dict:
+    """A holding as read: one whose stored numbers aren't all finite (a NaN price once stored from the price feed;
+    no JSON response can carry it) is valued at its buy price instead, so it can still be listed, fixed or deleted."""
+    numbers = [equity.get(key) for key in _EQUITY_NUMBERS]
+    if all(value is None or (isinstance(value, (int, float)) and math.isfinite(value)) for value in numbers):
+        return equity
+    price = equity.get("current_price")
+    if not (isinstance(price, (int, float)) and math.isfinite(price)):
+        price = equity["avg_buy_price"]
+    return {**equity, "current_price": price, **_equity_numbers(equity["quantity"], equity["avg_buy_price"], price)}
+
 def get_equities_by_user(user_id: str) -> List[Dict]:
     data = load_data()
-    return [e for e in data["equities"] if e["user_id"] == user_id]
+    return [_readable_equity(e) for e in data["equities"] if e["user_id"] == user_id]
 
 def get_equity_by_id(equity_id: str, user_id: str) -> Optional[Dict]:
     data = load_data()
     for equity in data["equities"]:
         if equity["id"] == equity_id and equity["user_id"] == user_id:
-            return equity
+            return _readable_equity(equity)
     return None
 
 def create_equity(user_id: str, equity_data: Dict) -> Dict:
@@ -418,6 +438,8 @@ def update_equity(equity_id: str, user_id: str, update_data: Dict) -> Optional[D
             current_price = row.get("current_price")
             if current_price is None:
                 current_price = row["avg_buy_price"]
+            elif not math.isfinite(current_price):  # a NaN stored before prices were checked
+                current_price = row["current_price"] = row["avg_buy_price"]
             row.update(_equity_numbers(row["quantity"], row["avg_buy_price"], current_price))
             row["updated_at"] = get_timestamp()
             save_data(data)

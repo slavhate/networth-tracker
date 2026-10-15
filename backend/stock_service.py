@@ -1,11 +1,17 @@
 """
 Stock price fetching service using Yahoo Finance API directly
+
+Blocking (requests and a short sleep): async routes call fetch_stock_price in a worker thread.
 """
+import math
 import requests
 from typing import Optional, Dict
+from urllib.parse import quote
 import logging
 import time
 import random
+
+from models import MAX_AMOUNT
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +42,18 @@ def get_yahoo_symbol(symbol: str, market: str) -> str:
     else:
         return symbol
 
+def valid_price(price) -> bool:
+    """Whether a price from the feed can be stored: a finite number above zero and within the input limits
+    (a NaN, which Python's json accepts, would make every later read of the holding fail)."""
+    return (isinstance(price, (int, float)) and not isinstance(price, bool)
+            and math.isfinite(price) and 0 < price <= MAX_AMOUNT)
+
 def _fetch_price_direct(yahoo_symbol: str) -> Optional[float]:
     """Fetch price using Yahoo Finance Chart API directly"""
     try:
-        # Yahoo Finance Chart API - more reliable than scraping
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+        # Yahoo Finance Chart API - more reliable than scraping. The symbol is user input: encoded as one path
+        # segment, so a "/", "?" or "#" in it can't change which URL is asked for
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(yahoo_symbol, safe='')}"
         params = {
             'interval': '1d',
             'range': '5d'
@@ -56,17 +69,17 @@ def _fetch_price_direct(yahoo_symbol: str) -> Optional[float]:
             if result:
                 meta = result[0].get('meta', {})
                 price = meta.get('regularMarketPrice')
-                if price:
+                if valid_price(price):
                     return float(price)
                 
                 # Fallback to last close
                 indicators = result[0].get('indicators', {})
-                quote = indicators.get('quote', [{}])[0]
-                closes = quote.get('close', [])
+                quotes = indicators.get('quote', [{}])[0]
+                closes = quotes.get('close', [])
                 if closes:
-                    # Get last non-None close price
+                    # Get the last usable close price
                     for close in reversed(closes):
-                        if close is not None:
+                        if valid_price(close):
                             return float(close)
         
         logger.debug(f"Chart API failed for {yahoo_symbol}: status {response.status_code}")

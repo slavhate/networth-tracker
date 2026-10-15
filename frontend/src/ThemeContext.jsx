@@ -4,12 +4,20 @@ const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
   const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('darkMode');
-    return saved ? JSON.parse(saved) : false;
+    // Storage can be unavailable or hold a corrupt value; fall back to light mode
+    try {
+      return JSON.parse(localStorage.getItem('darkMode')) === true;
+    } catch {
+      return false;
+    }
   });
 
   useEffect(() => {
-    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+    try {
+      localStorage.setItem('darkMode', JSON.stringify(darkMode));
+    } catch {
+      // storage unavailable - the choice just won't persist
+    }
     if (darkMode) {
       document.documentElement.classList.add('dark');
     } else {

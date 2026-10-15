@@ -6,8 +6,8 @@ from typing import Any, Dict, Type
 from pydantic import BaseModel, ValidationError
 
 from models import (
-    AssetRestore, LiabilityCreate, BankAccountCreate, InsuranceCreate,
-    MutualFundRestore, EquityRestore, SnapshotRestore, GoalCreate,
+    AssetRestore, LiabilityRestore, BankAccountRestore, InsuranceRestore,
+    MutualFundRestore, EquityRestore, SnapshotRestore, GoalRestore,
 )
 
 MAX_BACKUP_BYTES = 10 * 1024 * 1024
@@ -16,9 +16,9 @@ SIP_PRICING_KEYS = ("sip_units", "sip_invested", "sip_priced_through")
 # Backup sections holding a list of items, and the model each item must satisfy
 LIST_SECTIONS: Dict[str, Type[BaseModel]] = {
     "assets": AssetRestore,
-    "liabilities": LiabilityCreate,
-    "bank_accounts": BankAccountCreate,
-    "insurances": InsuranceCreate,
+    "liabilities": LiabilityRestore,
+    "bank_accounts": BankAccountRestore,
+    "insurances": InsuranceRestore,
     "mutual_funds": MutualFundRestore,
     "equities": EquityRestore,
     "snapshots": SnapshotRestore,
@@ -96,5 +96,5 @@ def parse_backup(raw: bytes) -> Dict[str, Any]:
                 fund.pop(key, None)
 
     goal = backup.get("goal")
-    cleaned["goal"] = None if goal is None else _clean(GoalCreate, goal, "goal")
+    cleaned["goal"] = None if goal is None else _clean(GoalRestore, goal, "goal")
     return cleaned

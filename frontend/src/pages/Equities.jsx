@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { equitiesAPI, exchangeAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
 import { 
   Plus, 
   Edit2, 
@@ -65,20 +66,34 @@ export default function Equities() {
     notes: ''
   });
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
+  // Only the latest list request may update the page: the slow live-price load started on mount must not
+  // overwrite the list fetched after a quicker edit or delete.
+  const fetchSeq = useRef(0);
+
   const fetchEquities = async (refresh = false) => {
+    const requestId = ++fetchSeq.current;
+    const isLatest = () => requestId === fetchSeq.current;
     try {
       if (refresh) setRefreshing(true);
       else setLoading(true);
       const response = await equitiesAPI.getAll(refresh);
+      if (!isLatest()) return;
       setEquities(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load equities');
+      if (!isLatest()) return;
+      setPageError({ message: errorMessage(err, 'Failed to load equities'), retry: true });
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isLatest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -88,9 +103,8 @@ export default function Equities() {
       if (response.data?.usd_to_inr) {
         setUsdToInr(response.data.usd_to_inr);
       }
-    } catch (err) {
-      // Use default rate if API fails
-      console.warn('Failed to fetch exchange rate, using default');
+    } catch {
+      // the default rate stays in use
     }
   };
 
@@ -112,7 +126,7 @@ export default function Equities() {
         market: equity.market,
         quantity: equity.quantity.toString(),
         avg_buy_price: equity.avg_buy_price.toString(),
-        current_price: equity.current_price ? equity.current_price.toString() : '',
+        current_price: equity.current_price != null ? equity.current_price.toString() : '',
         notes: equity.notes || ''
       });
     } else {
@@ -155,9 +169,11 @@ export default function Equities() {
         symbol: formData.symbol.toUpperCase(),
         company_name: formData.company_name || null,
         market: formData.market,
-        quantity: parseInt(formData.quantity),
+        // parseFloat, not parseInt: a fractional quantity is sent as it is (and validated by the server), never truncated
+        quantity: parseFloat(formData.quantity),
         avg_buy_price: parseFloat(formData.avg_buy_price),
-        current_price: formData.current_price ? parseFloat(formData.current_price) : null,
+        // Empty means "fetch the live price"; a typed 0 is a price
+        current_price: formData.current_price === '' ? null : parseFloat(formData.current_price),
         notes: formData.notes || null
       };
 
@@ -183,7 +199,7 @@ export default function Equities() {
       await equitiesAPI.delete(id);
       fetchEquities();
     } catch (err) {
-      setError('Failed to delete equity');
+      setPageError({ message: errorMessage(err, 'Failed to delete equity'), retry: false });
     }
   };
 
@@ -236,6 +252,12 @@ export default function Equities() {
         </div>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? () => fetchEquities() : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card bg-gradient-to-r from-blue-500 to-blue-600 text-white">
@@ -246,7 +268,7 @@ export default function Equities() {
                 <AnimatedNumber 
                   value={totalInvestedINR} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
               <p className="text-xs text-blue-200 mt-0.5">All markets in INR</p>
@@ -265,7 +287,7 @@ export default function Equities() {
                 <AnimatedNumber 
                   value={totalCurrentValueINR} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
               <p className="text-xs text-green-200 mt-0.5">USD @ ₹{usdToInr.toFixed(2)}</p>
@@ -280,13 +302,13 @@ export default function Equities() {
           <div className="flex items-center justify-between">
             <div>
               <p className={`${totalGainLossINR >= 0 ? 'text-emerald-100' : 'text-red-100'} font-medium`}>
-                {totalGainLossINR >= 0 ? 'Profit' : 'Loss'}
+                {!loaded ? 'Profit / Loss' : totalGainLossINR >= 0 ? 'Profit' : 'Loss'}
               </p>
               <p className="text-xl font-bold mt-1">
                 <AnimatedNumber 
                   value={Math.abs(totalGainLossINR)} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -304,6 +326,7 @@ export default function Equities() {
                 <AnimatedNumber 
                   value={overallReturnPercent} 
                   formatter={(v) => formatPercent(v)}
+                  privacyMask={loaded ? null : '—'}
                 />
               </p>
             </div>
@@ -315,7 +338,7 @@ export default function Equities() {
       </div>
 
       {/* Equities List */}
-      {equities.length === 0 ? (
+      {equities.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <BarChart3 className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white">No stocks yet</h3>
@@ -347,13 +370,16 @@ export default function Equities() {
                     )}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mt-2">
                       <span className="text-gray-500 dark:text-gray-400">
-                        Qty: <span className="text-gray-900 dark:text-white font-medium">{equity.quantity}</span>
+                        Qty: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '••' : equity.quantity}</span>
                       </span>
                       <span className="text-gray-500 dark:text-gray-400">
                         Avg: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(equity.avg_buy_price, equity.market)}</span>
                       </span>
                       <span className="text-gray-500 dark:text-gray-400">
-                        LTP: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(equity.current_price, equity.market)}</span>
+                        LTP: <span className="text-gray-900 dark:text-white font-medium">
+                          {/* No price yet is shown as a dash, not as a zero price */}
+                          {equity.current_price == null && !privacyMode ? '—' : formatCurrency(equity.current_price, equity.market)}
+                        </span>
                       </span>
                     </div>
                     {equity.notes && (

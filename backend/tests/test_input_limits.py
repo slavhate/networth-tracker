@@ -194,3 +194,106 @@ def test_a_normal_nav_refresh_still_updates_the_fund(client, auth_headers, monke
     assert stored["current_nav"] == 120
     assert stored["current_value"] == 1200
     assert stored["scheme_code"] == "000000"
+
+
+@pytest.mark.parametrize("path, body, field, limit", [
+    ("/api/assets", {"name": "Test flat", "value": 1, "category": "real_estate"}, "description", 2000),
+    ("/api/liabilities", {"name": "Test loan", "amount": 1, "category": "other"}, "description", 2000),
+    ("/api/bank-accounts", {"bank_name": "Test Bank", "account_number": "00001234", "account_type": "savings",
+                            "balance": 1}, "branch", 100),
+    ("/api/insurances", {"policy_name": "Test term", "provider": "Test Insurer", "insurance_type": "term",
+                         "sum_assured": 1, "premium": 1}, "notes", 2000),
+    ("/api/insurances", {"policy_name": "Test term", "provider": "Test Insurer", "insurance_type": "term",
+                         "sum_assured": 1, "premium": 1}, "nominee", 100),
+    ("/api/mutual-funds", {"fund_name": "Test index", "amc": "Test AMC", "category": "index",
+                           "invested_amount": 1}, "folio_number", 100),
+    ("/api/equities", {"symbol": "TEST", "market": "NSE", "quantity": 1, "avg_buy_price": 1}, "notes", 2000),
+    ("/api/equities", {"symbol": "TEST", "market": "NSE", "quantity": 1, "avg_buy_price": 1}, "company_name", 150),
+    ("/api/goal", {"target_amount": 1}, "name", 100),
+])
+def test_free_text_has_a_length_limit(client, auth_headers, path, body, field, limit):
+    """One request can't bloat the data file that every later request reads."""
+    too_long = client.post(path, headers=auth_headers, json={**body, field: "x" * (limit + 1)})
+    assert too_long.status_code == 422
+
+    at_limit = client.post(path, headers=auth_headers, json={**body, field: "x" * limit})
+    assert at_limit.status_code in (200, 201), at_limit.text
+
+
+def test_updates_have_the_same_text_limits(client, auth_headers):
+    asset = client.post("/api/assets", headers=auth_headers,
+                        json={"name": "Test flat", "value": 100, "category": "real_estate"}).json()
+
+    resp = client.put(f"/api/assets/{asset['id']}", headers=auth_headers, json={"description": "x" * 2001})
+
+    assert resp.status_code == 422
+
+
+LEGACY_TEXT = "x" * 5000  # longer than any cap: what a version without the caps could have stored
+
+# (collection, row as created through the API, field set to LEGACY_TEXT, list endpoint)
+LEGACY_ROWS = [
+    ("assets", ("/api/assets", {"name": "Test flat", "value": 1, "category": "real_estate"}), "description",
+     "/api/assets"),
+    ("liabilities", ("/api/liabilities", {"name": "Test loan", "amount": 1, "category": "other"}), "description",
+     "/api/liabilities"),
+    ("bank_accounts", ("/api/bank-accounts", {"bank_name": "Test Bank", "account_number": "00001234",
+                                              "account_type": "savings", "balance": 1}), "branch",
+     "/api/bank-accounts"),
+    ("insurances", ("/api/insurances", {"policy_name": "Test term", "provider": "Test Insurer",
+                                        "insurance_type": "term", "sum_assured": 1, "premium": 1}), "notes",
+     "/api/insurances"),
+    ("mutual_funds", ("/api/mutual-funds", {"fund_name": "Test index", "amc": "Test AMC", "category": "index",
+                                            "invested_amount": 1}), "folio_number", "/api/mutual-funds"),
+    ("equities", ("/api/equities", {"symbol": "TEST", "market": "NSE", "quantity": 1, "avg_buy_price": 1}),
+     "company_name", "/api/equities"),
+]
+
+
+def _store_legacy_text(client, auth_headers):
+    """Every kind of row, then over-long text written straight into the data file, as an older version allowed."""
+    import database as db
+
+    for _, (path, body), _, _ in LEGACY_ROWS:
+        assert client.post(path, headers=auth_headers, json=body).status_code == 201
+    client.post("/api/goal", headers=auth_headers, json={"target_amount": 1})
+    data = db.load_data()
+    for collection, _, field, _ in LEGACY_ROWS:
+        data[collection][0][field] = LEGACY_TEXT
+    data["goals"][0]["name"] = LEGACY_TEXT
+    db.save_data(data)
+
+
+def test_text_saved_before_the_caps_still_reads(client, auth_headers):
+    _store_legacy_text(client, auth_headers)
+
+    for _, _, field, list_path in LEGACY_ROWS:
+        resp = client.get(list_path, headers=auth_headers)
+        assert resp.status_code == 200, list_path
+        assert resp.json()[0][field] == LEGACY_TEXT
+    goal = client.get("/api/goal", headers=auth_headers)
+    assert goal.status_code == 200 and goal.json()["name"] == LEGACY_TEXT
+    assert client.get("/api/dashboard", headers=auth_headers).status_code == 200
+
+
+def test_a_backup_with_text_saved_before_the_caps_round_trips(client, auth_headers):
+    _store_legacy_text(client, auth_headers)
+    backup = client.get("/api/export", headers=auth_headers).json()
+
+    resp = _restore(client, auth_headers, backup)
+
+    assert resp.status_code == 200, resp.text
+    for _, _, field, list_path in LEGACY_ROWS:
+        assert client.get(list_path, headers=auth_headers).json()[0][field] == LEGACY_TEXT
+    assert client.get("/api/goal", headers=auth_headers).json()["name"] == LEGACY_TEXT
+
+
+def test_new_input_is_still_capped_when_older_rows_are_not(client, auth_headers):
+    _store_legacy_text(client, auth_headers)
+    [asset] = client.get("/api/assets", headers=auth_headers).json()
+
+    assert client.put(f"/api/assets/{asset['id']}", headers=auth_headers,
+                      json={"description": LEGACY_TEXT}).status_code == 422
+    assert client.put("/api/goal", headers=auth_headers, json={"name": LEGACY_TEXT}).status_code == 422
+    # An edit that leaves the old text alone still works
+    assert client.put(f"/api/assets/{asset['id']}", headers=auth_headers, json={"value": 2}).status_code == 200

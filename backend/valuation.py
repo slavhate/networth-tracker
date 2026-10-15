@@ -22,19 +22,19 @@ def parse_date(value: Optional[str]) -> Optional[date]:
     return date.fromisoformat(value) if value else None
 
 
-def add_months(d: date, n: int) -> date:
-    """The same day-of-month n months later, clamped to the end of shorter months."""
+def add_months(d: date, n: int, day: Optional[int] = None) -> date:
+    """The same day-of-month (or `day`) n months later, clamped to the end of shorter months."""
     index = d.month - 1 + n
     year, month = d.year + index // 12, index % 12 + 1
-    return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
+    return date(year, month, min(day or d.day, calendar.monthrange(year, month)[1]))
 
 
-def months_between(start: date, end: date) -> int:
-    """How many monthly anniversaries of `start` fall on or before `end`."""
+def months_between(start: date, end: date, day: Optional[int] = None) -> int:
+    """How many monthly anniversaries of `start` (falling on `day` when given) fall on or before `end`."""
     if end <= start:
         return 0
     months = (end.year - start.year) * 12 + (end.month - start.month)
-    if add_months(start, months) > end:
+    if add_months(start, months, day) > end:
         months -= 1
     return months
 
@@ -395,10 +395,23 @@ def emi_for_tenure(principal: float, annual_rate: float, months: int) -> float:
     return _round_up_to_paisa(principal * r * (growth_minus_one + 1) / growth_minus_one)
 
 
-def _remaining_payments(balance: float, r: float, emi: float, anchor: date, paid: int) -> Optional[List[Dict]]:
+def emi_day(liability: Dict) -> Optional[int]:
+    """The day of the month a loan's EMIs fall on: its balance date's day, unless that date is a short month's
+    last day standing in for a later one (`emi_day`, e.g. 28 February for an EMI due on the 31st)."""
+    anchor = parse_date(liability.get("balance_date"))
+    if anchor is None:
+        return None
+    day = liability.get("emi_day")
+    if day and day > anchor.day == calendar.monthrange(anchor.year, anchor.month)[1]:
+        return day
+    return anchor.day
+
+
+def _remaining_payments(balance: float, r: float, emi: float, anchor: date, paid: int,
+                        day: int) -> Optional[List[Dict]]:
     """Monthly payments from `balance`, owed after `paid` anniversaries of `anchor`, until cleared; None past
-    MAX_SCHEDULE_MONTHS. Payment k falls on anniversary `paid + k` of the balance date, so a month-end anchor
-    returns to its day after a short month. The caller guarantees the EMI exceeds the first month's interest."""
+    MAX_SCHEDULE_MONTHS. Payment k falls on anniversary `paid + k` of the balance date (on `day`), so a month-end
+    anchor returns to its day after a short month. The caller guarantees the EMI exceeds the first month's interest."""
     payments: List[Dict] = []
     while balance > PAID_OFF:
         if len(payments) == MAX_SCHEDULE_MONTHS:
@@ -406,7 +419,7 @@ def _remaining_payments(balance: float, r: float, emi: float, anchor: date, paid
         interest = balance * r
         payment = min(emi, balance + interest)
         balance -= payment - interest
-        payments.append({"date": add_months(anchor, paid + len(payments) + 1), "payment": payment,
+        payments.append({"date": add_months(anchor, paid + len(payments) + 1, day), "payment": payment,
                          "interest": interest, "principal": payment - interest, "balance": max(balance, 0.0)})
     return payments
 
@@ -419,9 +432,10 @@ def _loan_projection(liability: Dict, on: date):
         return {"outstanding": liability["amount"], **_NOT_AMORTIZED}, None
 
     r = (liability.get("interest_rate") or 0) / 1200
-    paid = months_between(anchor, on)
+    day = emi_day(liability)
+    paid = months_between(anchor, on, day)
     # Where a rate or EMI change starts from: the outstanding on this date is the balance to re-anchor at.
-    last_emi_date = add_months(anchor, paid).isoformat()
+    last_emi_date = add_months(anchor, paid, day).isoformat()
     balance = liability["amount"]
     cleared_on = anchor if balance <= PAID_OFF else None
     for k in range(1, paid + 1):
@@ -429,7 +443,7 @@ def _loan_projection(liability: Dict, on: date):
             break
         balance = balance * (1 + r) - emi
         if balance <= PAID_OFF:
-            cleared_on = add_months(anchor, k)
+            cleared_on = add_months(anchor, k, day)
 
     if cleared_on:
         return {"outstanding": 0.0, "amortized": True, "months_remaining": 0, "payoff_date": cleared_on.isoformat(),
@@ -444,7 +458,7 @@ def _loan_projection(liability: Dict, on: date):
 
     status["next_emi_interest"] = round(balance * r, 2)
     status["next_emi_principal"] = round(min(emi, balance * (1 + r)) - balance * r, 2)
-    payments = _remaining_payments(balance, r, emi, anchor, paid)
+    payments = _remaining_payments(balance, r, emi, anchor, paid, day)
     if payments is not None:
         status["months_remaining"] = len(payments)
         status["payoff_date"] = payments[-1]["date"].isoformat()

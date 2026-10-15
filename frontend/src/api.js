@@ -13,7 +13,8 @@ const api = axios.create({
 // Add auth token to requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
-  if (token) {
+  // A request that already names its token (checking a fresh login before storing it) keeps it
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -65,7 +66,8 @@ export const authAPI = {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
   },
-  getMe: () => api.get('/api/auth/me'),
+  // With a token: check a freshly issued token before it is stored
+  getMe: (token) => api.get('/api/auth/me', token ? { headers: { Authorization: `Bearer ${token}` } } : undefined),
   verify2fa: (mfaToken, code) => api.post('/api/auth/login/2fa', { mfa_token: mfaToken, code }),
   changePassword: (data) => api.post('/api/auth/password', data),
 };
@@ -78,14 +80,16 @@ export const twoFactorAPI = {
   disable: (password, code) => api.post('/api/auth/2fa/disable', { password, code }),
 };
 
+// Path segments built from data are always encoded, so a stray "/", "?" or "#" can't change the route
+const seg = (value) => encodeURIComponent(value);
+
 // Assets API
 export const assetsAPI = {
   getAll: () => api.get('/api/assets'),
-  get: (id) => api.get(`/api/assets/${id}`),
   create: (data) => api.post('/api/assets', data),
-  update: (id, data) => api.put(`/api/assets/${id}`, data),
-  delete: (id) => api.delete(`/api/assets/${id}`),
-  refreshNav: (id) => api.post(`/api/assets/${id}/refresh-nav`),
+  update: (id, data) => api.put(`/api/assets/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/assets/${seg(id)}`),
+  refreshNav: (id) => api.post(`/api/assets/${seg(id)}/refresh-nav`),
 };
 
 // NPS API
@@ -96,55 +100,43 @@ export const npsAPI = {
 // Liabilities API
 export const liabilitiesAPI = {
   getAll: () => api.get('/api/liabilities'),
-  get: (id) => api.get(`/api/liabilities/${id}`),
   create: (data) => api.post('/api/liabilities', data),
-  update: (id, data) => api.put(`/api/liabilities/${id}`, data),
-  delete: (id) => api.delete(`/api/liabilities/${id}`),
-  schedule: (id) => api.get(`/api/liabilities/${id}/schedule`),
+  update: (id, data) => api.put(`/api/liabilities/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/liabilities/${seg(id)}`),
+  schedule: (id) => api.get(`/api/liabilities/${seg(id)}/schedule`),
 };
 
 // Bank Accounts API
 export const bankAccountsAPI = {
   getAll: () => api.get('/api/bank-accounts'),
-  get: (id) => api.get(`/api/bank-accounts/${id}`),
   create: (data) => api.post('/api/bank-accounts', data),
-  update: (id, data) => api.put(`/api/bank-accounts/${id}`, data),
-  delete: (id) => api.delete(`/api/bank-accounts/${id}`),
-  getSummary: () => api.get('/api/bank-accounts-summary'),
+  update: (id, data) => api.put(`/api/bank-accounts/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/bank-accounts/${seg(id)}`),
 };
 
 // Insurances API
 export const insurancesAPI = {
   getAll: () => api.get('/api/insurances'),
-  get: (id) => api.get(`/api/insurances/${id}`),
   create: (data) => api.post('/api/insurances', data),
-  update: (id, data) => api.put(`/api/insurances/${id}`, data),
-  delete: (id) => api.delete(`/api/insurances/${id}`),
-  getSummary: () => api.get('/api/insurances-summary'),
+  update: (id, data) => api.put(`/api/insurances/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/insurances/${seg(id)}`),
 };
 
 // Mutual Funds API
 export const mutualFundsAPI = {
-  getAll: (refreshNav = false) => api.get(`/api/mutual-funds?refresh_nav=${refreshNav}`),
-  get: (id) => api.get(`/api/mutual-funds/${id}`),
+  getAll: (refreshNav = false) => api.get('/api/mutual-funds', { params: { refresh_nav: refreshNav } }),
   create: (data) => api.post('/api/mutual-funds', data),
-  update: (id, data) => api.put(`/api/mutual-funds/${id}`, data),
-  delete: (id) => api.delete(`/api/mutual-funds/${id}`),
-  getSummary: () => api.get('/api/mutual-funds-summary'),
-  refreshNav: (id) => api.post(`/api/mutual-funds/${id}/refresh-nav`),
-  searchNav: (query) => api.get(`/api/nav/search?q=${encodeURIComponent(query)}`),
+  update: (id, data) => api.put(`/api/mutual-funds/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/mutual-funds/${seg(id)}`),
+  refreshNav: (id) => api.post(`/api/mutual-funds/${seg(id)}/refresh-nav`),
 };
 
 // Equities API
 export const equitiesAPI = {
-  getAll: (refreshPrices = false) => api.get(`/api/equities?refresh_prices=${refreshPrices}`),
-  get: (id) => api.get(`/api/equities/${id}`),
+  getAll: (refreshPrices = false) => api.get('/api/equities', { params: { refresh_prices: refreshPrices } }),
   create: (data) => api.post('/api/equities', data),
-  update: (id, data) => api.put(`/api/equities/${id}`, data),
-  delete: (id) => api.delete(`/api/equities/${id}`),
-  refreshPrice: (id) => api.post(`/api/equities/${id}/refresh-price`),
-  getSummary: () => api.get('/api/equities-summary'),
-  getStockPrice: (market, symbol) => api.get(`/api/stock-price/${market}/${symbol}`),
+  update: (id, data) => api.put(`/api/equities/${seg(id)}`, data),
+  delete: (id) => api.delete(`/api/equities/${seg(id)}`),
 };
 
 // Dashboard API
@@ -155,7 +147,6 @@ export const dashboardAPI = {
 
 // Snapshot Settings API (how often the dashboard saves an automatic snapshot)
 export const snapshotSettingsAPI = {
-  get: () => api.get('/api/settings/snapshots'),
   update: (frequency) => api.put('/api/settings/snapshots', { frequency }),
 };
 
@@ -167,9 +158,7 @@ export const exchangeAPI = {
 // Goal API
 export const goalAPI = {
   get: () => api.get('/api/goal'),
-  create: (data) => api.post('/api/goal', data),
   update: (data) => api.put('/api/goal', data),
-  delete: () => api.delete('/api/goal'),
 };
 
 // Backup & Restore API

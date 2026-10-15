@@ -3,12 +3,25 @@ from pydantic_core import PydanticCustomError
 from typing import Annotated, Dict, Literal, Optional, List
 from datetime import date, datetime
 from enum import Enum
+import unicodedata
 
 # Upper bounds on user-entered numbers: far above any real holding, low enough that products and sums
 # of stored values can never overflow a float.
 MAX_AMOUNT = 1e15      # any rupee (or dollar) amount
 MAX_QUANTITY = 1e9     # shares
 MAX_UNITS = 1e12       # mutual fund units, grams, shares
+
+# Upper bounds on free text, so one request can't bloat the data file every later request reads
+MAX_NOTE_LENGTH = 2000     # descriptions and notes
+MAX_LABEL_LENGTH = 100     # branch, nominee, policy and folio numbers and other short labels
+MAX_PASSWORD_LENGTH = 128  # a new password (bcrypt reads only the first 72 characters anyway)
+# A password being checked: looser than a new one, so a longer password set before the cap still works
+MAX_CHECKED_PASSWORD_LENGTH = 1024
+
+# Used on request models only (*Create, *Update). The Base models that responses and restores build on keep plain
+# str: rows and backups saved before these caps existed may hold longer text, and must still read and restore.
+Note = Annotated[str, Field(max_length=MAX_NOTE_LENGTH)]
+Label = Annotated[str, Field(max_length=MAX_LABEL_LENGTH)]
 
 
 class InputModel(BaseModel):
@@ -107,10 +120,20 @@ class LiabilityCategory(str, Enum):
     PERSONAL_LOAN = "personal_loan"
     OTHER = "other"
 
+def _no_control_characters(value: str) -> str:
+    # A NUL would otherwise reach bcrypt, which refuses it with an error instead of a validation message
+    if any(unicodedata.category(ch) == "Cc" for ch in value):
+        raise PydanticCustomError("control_characters", "Must not contain control characters")
+    return value
+
+
+# Text a user types into a login form: no control characters (NUL, newline, escape, ...)
+Credential = Annotated[str, AfterValidator(_no_control_characters)]
+
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6)
-    email: str
+    username: Credential = Field(..., min_length=3, max_length=50)
+    password: Credential = Field(..., min_length=6, max_length=MAX_PASSWORD_LENGTH)
+    email: str = Field(..., max_length=254)
 
 class UserLogin(BaseModel):
     username: str
@@ -132,15 +155,15 @@ class TokenData(BaseModel):
     username: Optional[str] = None
 
 class MfaLoginRequest(BaseModel):
-    mfa_token: str
+    mfa_token: str = Field(..., max_length=2048)
     code: str = Field(..., max_length=64)
 
 class TwoFactorEnable(BaseModel):
-    password: str
+    password: str = Field(..., max_length=MAX_CHECKED_PASSWORD_LENGTH)
     code: str = Field(..., max_length=64)
 
 class TwoFactorDisable(BaseModel):
-    password: str
+    password: str = Field(..., max_length=MAX_CHECKED_PASSWORD_LENGTH)
     code: str = Field(..., max_length=64)
 
 class TwoFactorStatus(BaseModel):
@@ -155,8 +178,8 @@ class TwoFactorBackupCodes(BaseModel):
     backup_codes: List[str]
 
 class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=6)
+    current_password: str = Field(..., max_length=MAX_CHECKED_PASSWORD_LENGTH)
+    new_password: Credential = Field(..., min_length=6, max_length=MAX_PASSWORD_LENGTH)
     code: Optional[str] = Field(None, max_length=64)
 
 class AssetBase(InputModel):
@@ -184,9 +207,9 @@ class Asset(AssetBase):
     nps_priced_through: Optional[str] = None  # contributions up to this date are converted to units
 
 class AssetCreate(AssetBase):
-    pass
+    description: Optional[Note] = None
 
-class AssetRestore(AssetCreate):
+class AssetRestore(AssetBase):
     """An asset as stored in a backup file: the create fields plus what NPS pricing worked out"""
     nps_schemes: Optional[StoredNpsSchemes] = None
     nps_priced_through: Optional[IsoDate] = None
@@ -195,7 +218,7 @@ class AssetUpdate(InputModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     value: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
     category: Optional[AssetCategory] = None
-    description: Optional[str] = None
+    description: Optional[Note] = None
     annual_change_rate: Optional[float] = Field(None, ge=-99, le=100)  # % per year; negative depreciates
     valuation_date: Optional[IsoDate] = None  # the date `value` was accurate
     monthly_contribution: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)  # EPF/PPF
@@ -215,6 +238,9 @@ class LiabilityBase(InputModel):
     emi: Optional[float] = Field(None, gt=0, le=MAX_AMOUNT)
     balance_date: Optional[IsoDate] = None  # the date `amount` was the balance; EMIs fall on its anniversaries
     tenure_months: Optional[int] = Field(None, ge=1, le=600)  # input helper: EMI is derived from it when not given
+    # Kept by the server when the balance date moves onto a short month's last day (an EMI due on the 31st paid
+    # on 28 February): later EMIs still fall on this day, not on the 28th
+    emi_day: Optional[int] = Field(None, ge=29, le=31)
 
 class Liability(LiabilityBase):
     id: str
@@ -232,14 +258,17 @@ class Liability(LiabilityBase):
     last_emi_date: Optional[str] = None  # the latest EMI anniversary on or before today: where edits re-anchor
 
 class LiabilityCreate(LiabilityBase):
-    pass
+    description: Optional[Note] = None
+
+class LiabilityRestore(LiabilityBase):
+    """A liability as stored in a backup file"""
 
 class LiabilityUpdate(InputModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     amount: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
     category: Optional[LiabilityCategory] = None
     interest_rate: Optional[float] = Field(None, ge=0, le=100)
-    description: Optional[str] = None
+    description: Optional[Note] = None
     emi: Optional[float] = Field(None, gt=0, le=MAX_AMOUNT)
     balance_date: Optional[IsoDate] = None  # the date `amount` was the balance; EMIs fall on its anniversaries
     tenure_months: Optional[int] = Field(None, ge=1, le=600)  # input helper: EMI is derived from it when not given
@@ -261,7 +290,7 @@ class SnapshotRestore(InputModel):
     # Totals of valid holdings can pass 1e18 (1e9 shares at 1e15 each), so the cap is loose; InputModel rejects NaN/inf
     total_assets: float = Field(..., ge=0, le=1e300)
     total_liabilities: float = Field(..., ge=0, le=1e300)
-    timestamp: str
+    timestamp: str = Field(..., max_length=40)
     assets_by_category: Optional[Dict[str, Annotated[float, Field(ge=0, le=1e300)]]] = None
     liabilities_by_category: Optional[Dict[str, Annotated[float, Field(ge=0, le=1e300)]]] = None
     assets_by_class: Optional[Dict[str, Annotated[float, Field(ge=0, le=1e300)]]] = None
@@ -330,15 +359,19 @@ class BankAccount(BankAccountBase):
     days_to_maturity: Optional[int] = None
 
 class BankAccountCreate(BankAccountBase):
-    pass
+    branch: Optional[Label] = None
+    ifsc_code: Optional[str] = Field(None, max_length=20)
+
+class BankAccountRestore(BankAccountBase):
+    """A bank account as stored in a backup file"""
 
 class BankAccountUpdate(InputModel):
     bank_name: Optional[str] = Field(None, min_length=1, max_length=100)
     account_number: Optional[str] = Field(None, min_length=4, max_length=20)
     account_type: Optional[AccountType] = None
     balance: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
-    branch: Optional[str] = None
-    ifsc_code: Optional[str] = None
+    branch: Optional[Label] = None
+    ifsc_code: Optional[str] = Field(None, max_length=20)
     interest_rate: Optional[float] = Field(None, ge=0, le=100)  # FD/RD only, % per year
     start_date: Optional[IsoDate] = None
     maturity_date: Optional[IsoDate] = None
@@ -373,21 +406,28 @@ class Insurance(InsuranceBase):
     updated_at: str
 
 class InsuranceCreate(InsuranceBase):
-    pass
+    policy_number: Optional[Label] = None
+    premium_frequency: str = Field("yearly", max_length=20)
+    start_date: Optional[str] = Field(None, max_length=20)
+    end_date: Optional[str] = Field(None, max_length=20)
+    nominee: Optional[Label] = None
+    notes: Optional[Note] = None
+
+class InsuranceRestore(InsuranceBase):
+    """An insurance policy as stored in a backup file"""
 
 class InsuranceUpdate(InputModel):
     policy_name: Optional[str] = Field(None, min_length=1, max_length=100)
     provider: Optional[str] = Field(None, min_length=1, max_length=100)
-    policy_number: Optional[str] = None
+    policy_number: Optional[Label] = None
     insurance_type: Optional[InsuranceType] = None
     sum_assured: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
     premium: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
-    premium_frequency: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    nominee: Optional[str] = None
-    notes: Optional[str] = None
-    nominee: Optional[str] = None
+    premium_frequency: Optional[str] = Field(None, max_length=20)
+    start_date: Optional[str] = Field(None, max_length=20)
+    end_date: Optional[str] = Field(None, max_length=20)
+    nominee: Optional[Label] = None
+    notes: Optional[Note] = None
 
 # Mutual Fund Models
 class MutualFundCategory(str, Enum):
@@ -445,9 +485,10 @@ class MutualFund(MutualFundBase):
     total_invested: Optional[float] = Field(None, ge=0)  # invested amount + SIP installments
 
 class MutualFundCreate(MutualFundBase):
-    pass
+    folio_number: Optional[Label] = None
+    scheme_code: Optional[str] = Field(None, max_length=20)
 
-class MutualFundRestore(MutualFundCreate):
+class MutualFundRestore(MutualFundBase):
     """A mutual fund as stored in a backup file: the create fields plus what SIP pricing worked out"""
     sip_units: Optional[float] = Field(None, ge=0, le=MAX_UNITS)
     sip_invested: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
@@ -457,7 +498,7 @@ class MutualFundUpdate(InputModel):
     fund_name: Optional[str] = Field(None, min_length=1, max_length=150)
     amc: Optional[str] = Field(None, min_length=1, max_length=100)
     category: Optional[MutualFundCategory] = None
-    folio_number: Optional[str] = None
+    folio_number: Optional[Label] = None
     units: Optional[float] = Field(None, ge=0, le=MAX_UNITS)
     avg_nav: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
     current_nav: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
@@ -469,7 +510,7 @@ class MutualFundUpdate(InputModel):
     sip_start_date: Optional[IsoDate] = None
     sip_end_date: Optional[IsoDate] = None
     holdings_date: Optional[IsoDate] = None
-    scheme_code: Optional[str] = None
+    scheme_code: Optional[str] = Field(None, max_length=20)
 
     @model_validator(mode="after")
     def sip_dates_in_order(self):
@@ -507,23 +548,25 @@ class Equity(EquityBase):
 
 class EquityCreate(InputModel):
     symbol: str = Field(..., min_length=1, max_length=20)
-    company_name: Optional[str] = None
+    company_name: Optional[str] = Field(None, max_length=150)
     market: StockMarket
     quantity: int = Field(..., ge=1, le=MAX_QUANTITY)
     avg_buy_price: float = Field(..., ge=0, le=MAX_AMOUNT)
-    notes: Optional[str] = None
+    notes: Optional[Note] = None
 
 class EquityUpdate(InputModel):
     symbol: Optional[str] = Field(None, min_length=1, max_length=20)
-    company_name: Optional[str] = None
+    company_name: Optional[str] = Field(None, max_length=150)
     market: Optional[StockMarket] = None
     quantity: Optional[int] = Field(None, ge=1, le=MAX_QUANTITY)
     avg_buy_price: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
     current_price: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
-    notes: Optional[str] = None
+    notes: Optional[Note] = None
 
 class EquityRestore(EquityCreate):
-    """An equity as stored in a backup file: the create fields plus the last known price"""
+    """An equity as stored in a backup file: the create fields plus the last known price (text uncapped, as stored)"""
+    company_name: Optional[str] = None
+    notes: Optional[str] = None
     current_price: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
 
 # Goal Models
@@ -538,10 +581,13 @@ class Goal(GoalBase):
     updated_at: str
 
 class GoalCreate(GoalBase):
-    pass
+    name: Optional[str] = Field("Net Worth Goal", max_length=100)
+
+class GoalRestore(GoalBase):
+    """A goal as stored in a backup file"""
 
 class GoalUpdate(InputModel):
     target_amount: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=100)
 
 

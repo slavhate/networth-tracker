@@ -1,11 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, Path, Query, Request, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+from contextlib import asynccontextmanager
+from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
+import asyncio
+import calendar
+import ipaddress
 import logging
+import math
 import secrets
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from config import settings
 from models import (
@@ -19,13 +26,14 @@ from models import (
     MutualFund, MutualFundCreate, MutualFundUpdate,
     Equity, EquityCreate, EquityUpdate,
     Goal, GoalCreate, GoalUpdate,
-    USD_MARKETS, MAX_AMOUNT
+    StockMarket, USD_MARKETS, MAX_AMOUNT
 )
 from auth import (
-    get_password_hash, verify_password, create_access_token,
+    get_password_hash, verify_password, create_access_token, dummy_password_hash, has_control_characters,
     get_current_user, create_mfa_token, decode_mfa_token, token_version_of
 )
 import database as db
+import login_limiter
 import two_factor
 import stock_service
 import exchange_service
@@ -37,10 +45,16 @@ import valuation
 
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup_event()
+    yield
+
 app = FastAPI(
     title="Net Worth Tracker API",
     description="A professional API for tracking personal net worth",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Middleware order: the one added last is outermost. The warnings middleware is added first so that the CORS
@@ -70,17 +84,22 @@ app.add_middleware(
 
 # ============== Auth Routes ==============
 
+def _username_taken() -> HTTPException:
+    # Open registration can't hide which usernames exist; ALLOW_REGISTRATION=false closes it once you have yours
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already registered")
+
 @app.post("/api/auth/register", response_model=User, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate):
     """Register a new user"""
-    existing_user = db.get_user_by_username(user_data.username)
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered"
-        )
-    
-    hashed_password = get_password_hash(user_data.password)
+    if not settings.ALLOW_REGISTRATION:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration is disabled")
+    if db.get_user_by_username(user_data.username):
+        raise _username_taken()
+
+    hashed_password = await run_in_threadpool(get_password_hash, user_data.password)
+    # Checked again: another registration for the name may have finished while the password was hashed
+    if db.get_user_by_username(user_data.username):
+        raise _username_taken()
     user = db.create_user(user_data.username, user_data.email, hashed_password)
     
     return User(
@@ -92,7 +111,7 @@ async def register(user_data: UserCreate):
 
 def _now() -> datetime:
     """Naive UTC; patched in tests."""
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 def _access_token_for(user: dict) -> Token:
     access_token = create_access_token(
@@ -101,23 +120,93 @@ def _access_token_for(user: dict) -> Token:
     )
     return Token(access_token=access_token, token_type="bearer")
 
-def _too_many_attempts(user: dict, now: datetime) -> HTTPException:
-    minutes = two_factor.lock_minutes_remaining(user, now)
+def _retry_in(seconds: int) -> HTTPException:
+    minutes = max(1, math.ceil(seconds / 60))
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=f"Too many attempts. Try again in {minutes} minutes."
+        detail=f"Too many attempts. Try again in {minutes} minutes.",
+        headers={"Retry-After": str(seconds)},
+    )
+
+def _too_many_attempts(user: dict, now: datetime) -> HTTPException:
+    return _retry_in(two_factor.lock_minutes_remaining(user, now) * 60)
+
+@lru_cache(maxsize=4)
+def _trusted_networks(setting: str) -> Tuple:
+    networks = []
+    for entry in filter(None, (part.strip() for part in setting.split(","))):
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("TRUSTED_PROXIES: %r is not an IP address or network; ignored", entry)
+    return tuple(networks)
+
+def _is_trusted_proxy(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # not an IP address (e.g. the test client's "testclient")
+    return any(address in network for network in _trusted_networks(settings.TRUSTED_PROXIES))
+
+def _valid_ip(text: str) -> Optional[str]:
+    try:
+        return str(ipaddress.ip_address(text.strip()))
+    except ValueError:
+        return None
+
+def _client_ip(request: Request) -> str:
+    """The caller's address, for the login limiter. Only a peer in TRUSTED_PROXIES (the bundled nginx) is believed
+    about who its client is: its X-Real-IP, else the nearest untrusted address in X-Forwarded-For. Anyone else is
+    taken at its own address, so a caller can't pick the address it is counted against."""
+    host = request.client.host if request.client else "unknown"
+    if not _is_trusted_proxy(host):
+        return host
+    real_ip = _valid_ip(request.headers.get("x-real-ip", ""))
+    if real_ip:
+        return real_ip
+    # Right to left: each trusted proxy appended the address it received from; the first one not trusted is the client
+    for hop in reversed(request.headers.get("x-forwarded-for", "").split(",")):
+        address = _valid_ip(hop)
+        if address and not _is_trusted_proxy(address):
+            return address
+    return host
+
+def _check_login_limit(limits: Dict[str, int]) -> None:
+    wait = login_limiter.retry_after(limits)
+    if wait:
+        raise _retry_in(wait)
+
+def _incorrect_login() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password",
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
 @app.post("/api/auth/login", response_model=Token, response_model_exclude_none=True)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """Login and get an access token, or a 2FA challenge token if 2FA is enabled"""
+    if has_control_characters(form_data.username) or has_control_characters(form_data.password):
+        raise HTTPException(status_code=422, detail="Username and password can't contain control characters")
+    client_ip = _client_ip(request)
+    pair_key = login_limiter.username_and_client_key(form_data.username, client_ip)
+    user_key = login_limiter.username_key(form_data.username)
+    ip_key = login_limiter.ip_key(client_ip)
+    _check_login_limit({pair_key: login_limiter.MAX_FAILURES_PER_USERNAME_AND_CLIENT,
+                        user_key: login_limiter.MAX_FAILURES_PER_USERNAME,
+                        ip_key: login_limiter.MAX_FAILURES_PER_IP})
+    # Counted as a failure until the password checks out: the check runs in a worker thread, and parallel guesses
+    # must not all get past the limit before the first of them is recorded
+    login_limiter.record_failure((pair_key, user_key, ip_key))
     user = db.get_user_by_username(form_data.username)
-    if not user or not verify_password(form_data.password, user["hashed_password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # An unknown username is checked against a dummy hash, so it takes as long as a wrong password
+    hashed = user["hashed_password"] if user else dummy_password_hash()
+    password_ok = await run_in_threadpool(verify_password, form_data.password, hashed)
+    if not user or not password_ok:
+        raise _incorrect_login()
+    login_limiter.reset(pair_key)
+    login_limiter.reset(user_key)
+    login_limiter.forget_one(ip_key)
 
     if user.get("totp_enabled"):
         return Token(
@@ -129,11 +218,15 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return _access_token_for(user)
 
 @app.post("/api/auth/login/2fa", response_model=Token, response_model_exclude_none=True)
-async def login_2fa(request: MfaLoginRequest):
+async def login_2fa(request: MfaLoginRequest, http_request: Request):
     """Complete a 2FA login with an authenticator or backup code"""
+    client_ip = _client_ip(http_request)
+    ip_key = login_limiter.ip_key(client_ip)
+    _check_login_limit({ip_key: login_limiter.MAX_FAILURES_PER_IP})
     payload = decode_mfa_token(request.mfa_token)
     user = db.get_user_by_id(payload["user_id"]) if payload else None
     if not user or not user.get("totp_enabled") or payload.get("ver", 0) != token_version_of(user):
+        login_limiter.record_failure((ip_key,))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired login session"
@@ -142,15 +235,22 @@ async def login_2fa(request: MfaLoginRequest):
     now = _now()
     if two_factor.is_locked(user, now):
         raise _too_many_attempts(user, now)
+    pair_key = login_limiter.username_and_client_key(user["username"], client_ip)
+    user_key = login_limiter.username_key(user["username"])
+    _check_login_limit({pair_key: login_limiter.MAX_FAILURES_PER_USERNAME_AND_CLIENT,
+                        user_key: login_limiter.MAX_FAILURES_PER_USERNAME})
 
     ok, updates = two_factor.verify_second_factor(user, request.code, now)
     db.update_user(user["id"], updates)
     if not ok:
+        login_limiter.record_failure((pair_key, user_key, ip_key))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication code"
         )
 
+    login_limiter.reset(pair_key)
+    login_limiter.reset(user_key)
     return _access_token_for(user)
 
 @app.get("/api/auth/me", response_model=User)
@@ -196,10 +296,22 @@ async def two_factor_setup(user: dict = Depends(get_current_user_record)):
     db.update_user(user["id"], {"totp_pending_secret": secret})
     return TwoFactorSetup(secret=secret, otpauth_uri=two_factor.provisioning_uri(secret, user["username"]))
 
+_password_check_locks: Dict[str, asyncio.Lock] = {}
+
+def _password_check_lock(user_id: str) -> asyncio.Lock:
+    """One password-checked change at a time per user. The password check (bcrypt) runs in a worker thread, so
+    without this, parallel requests could all read the user before any of them records a failure, and the lockout
+    after MAX_FAILED_ATTEMPTS would let every one of them try."""
+    return _password_check_locks.setdefault(user_id, asyncio.Lock())
+
 @app.post("/api/auth/2fa/enable", response_model=TwoFactorBackupCodes)
 async def two_factor_enable(request: TwoFactorEnable, user: dict = Depends(get_current_user_record)):
     """Confirm enrollment with the password and a code; returns backup codes (shown only this once)"""
-    user = db.get_user_by_id(user["id"])  # fresh copy: no await between this read and the write below
+    async with _password_check_lock(user["id"]):
+        return await _two_factor_enable(request, user["id"])
+
+async def _two_factor_enable(request: TwoFactorEnable, user_id: str) -> TwoFactorBackupCodes:
+    user = db.get_user_by_id(user_id)  # fresh copy, read under the user's lock
     if user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
     pending = user.get("totp_pending_secret")
@@ -209,7 +321,7 @@ async def two_factor_enable(request: TwoFactorEnable, user: dict = Depends(get_c
     now = _now()
     if two_factor.is_locked(user, now):
         raise _too_many_attempts(user, now)
-    if not verify_password(request.password, user["hashed_password"]):
+    if not await run_in_threadpool(verify_password, request.password, user["hashed_password"]):
         db.update_user(user["id"], two_factor.record_failure(user, now))
         raise HTTPException(status_code=400, detail="Incorrect password")
     step = two_factor.verify_totp(pending, request.code, None, now)
@@ -229,13 +341,19 @@ async def two_factor_enable(request: TwoFactorEnable, user: dict = Depends(get_c
 @app.post("/api/auth/2fa/disable", status_code=status.HTTP_204_NO_CONTENT)
 async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get_current_user_record)):
     """Turn off 2FA; requires the password and a current authenticator or backup code"""
-    user = db.get_user_by_id(user["id"])  # fresh copy: lockout counters must not be stale under concurrent requests
+    async with _password_check_lock(user["id"]):
+        await _two_factor_disable(request, user["id"])
+
+async def _two_factor_disable(request: TwoFactorDisable, user_id: str) -> None:
+    user = db.get_user_by_id(user_id)  # fresh copy, read under the user's lock: lockout counters must not be stale
     if not user.get("totp_enabled"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
     now = _now()
     if two_factor.is_locked(user, now):
         raise _too_many_attempts(user, now)
-    if not verify_password(request.password, user["hashed_password"]):
+    password_ok = await run_in_threadpool(verify_password, request.password, user["hashed_password"])
+    user = db.get_user_by_id(user_id)  # read again: a 2FA login may have used a code meanwhile
+    if not password_ok:
         db.update_user(user["id"], two_factor.record_failure(user, now))
         raise HTTPException(status_code=400, detail="Incorrect password")
 
@@ -251,16 +369,25 @@ async def two_factor_disable(request: TwoFactorDisable, user: dict = Depends(get
 @app.post("/api/auth/password", response_model=Token, response_model_exclude_none=True)
 async def change_password(request: PasswordChange, user: dict = Depends(get_current_user_record)):
     """Change the current user's password; signs out every other session"""
-    user = db.get_user_by_id(user["id"])  # fresh copy: lockout counters must not be stale under concurrent requests
+    async with _password_check_lock(user["id"]):
+        return await _change_password(request, user["id"])
+
+async def _change_password(request: PasswordChange, user_id: str) -> Token:
+    user = db.get_user_by_id(user_id)  # fresh copy, read under the user's lock: lockout counters must not be stale
     now = _now()
     if two_factor.is_locked(user, now):
         raise _too_many_attempts(user, now)
-    if not verify_password(request.current_password, user["hashed_password"]):
+    password_ok = await run_in_threadpool(verify_password, request.current_password, user["hashed_password"])
+    if not password_ok:
+        user = db.get_user_by_id(user_id)  # read again: a 2FA login may have counted a failure meanwhile
         db.update_user(user["id"], two_factor.record_failure(user, now))
         raise HTTPException(status_code=400, detail="Incorrect password")
     # Checked before the 2FA step so a backup code is never spent on a change that would fail anyway.
-    if verify_password(request.new_password, user["hashed_password"]):
+    if await run_in_threadpool(verify_password, request.new_password, user["hashed_password"]):
         raise HTTPException(status_code=400, detail="New password must be different from the current password")
+    new_hash = await run_in_threadpool(get_password_hash, request.new_password)
+    # Read again after the slow hashing: a 2FA login may have used a code meanwhile, and nothing below awaits
+    user = db.get_user_by_id(user_id)
 
     second_factor_updates = {}
     if user.get("totp_enabled"):
@@ -274,7 +401,7 @@ async def change_password(request: PasswordChange, user: dict = Depends(get_curr
     # Bumping token_version revokes every token issued before this change, including this request's.
     updated = db.update_user(user["id"], {
         **second_factor_updates,
-        "hashed_password": get_password_hash(request.new_password),
+        "hashed_password": new_hash,
         "token_version": token_version_of(user) + 1,
         "totp_failed_attempts": 0,
         "totp_locked_until": None,
@@ -376,6 +503,16 @@ def _liability_defaults(row: dict) -> dict:
     return {}
 
 
+def _check_unchanged(before: dict, now: Optional[dict], what: str) -> None:
+    """For an update that awaited a slow fetch: the row must still be as it was read before, or the update,
+    worked out from that copy, would overwrite what was saved meanwhile."""
+    if not now:  # deleted while the NAVs were being fetched
+        raise HTTPException(status_code=404, detail=f"{what} not found")
+    if now != before:
+        raise HTTPException(status_code=409, detail=f"{what} changed while its NAVs were being fetched; "
+                                                    "reload it and try again")
+
+
 def _merged(current: dict, changes: dict, clearable: frozenset) -> dict:
     """The row an update will leave in storage: a null replaces a value only in a clearable field."""
     return {**current, **{key: value for key, value in changes.items() if value is not None or key in clearable}}
@@ -390,6 +527,19 @@ def _emi_from_tenure(changes: dict, current: dict) -> dict:
             raise HTTPException(status_code=400, detail="The EMI worked out from the tenure is out of range")
         return {"emi": emi}
     return {}
+
+
+def _emi_day_change(current: dict, changes: dict) -> dict:
+    """When an update moves a loan's balance date: a short month's last day standing in for the loan's EMI day
+    (re-anchoring a loan due on the 31st at its 28 February EMI) keeps that day for later EMIs; any other date
+    starts a schedule on its own day."""
+    if "balance_date" not in changes or changes["balance_date"] == current.get("balance_date"):
+        return {}
+    new = valuation.parse_date(changes["balance_date"])
+    day = valuation.emi_day(current)
+    if new and day and day > new.day == calendar.monthrange(new.year, new.month)[1]:
+        return {"emi_day": day}
+    return {"emi_day": None}
 
 
 def _check_deposit_dates(row: dict) -> None:
@@ -483,9 +633,9 @@ async def update_asset(asset_id: str, update_data: AssetUpdate, user_id: str = D
         changes.update(await _nps_changes(merged))
     elif "nps_schemes" in changes:
         changes["nps_schemes"] = current.get("nps_schemes")  # same inputs: keep what pricing worked out
+    # Changes were worked out from `current`; a refresh or edit that landed while the NAVs were fetched wins
+    _check_unchanged(current, db.get_asset_by_id(asset_id, user_id), "Asset")
     asset = db.update_asset(asset_id, user_id, changes)
-    if not asset:  # deleted while the NAVs were being fetched
-        raise HTTPException(status_code=404, detail="Asset not found")
     return valuation.asset_view(asset, valuation.today())
 
 @app.delete("/api/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -576,6 +726,7 @@ async def update_liability(liability_id: str, update_data: LiabilityUpdate, user
         raise HTTPException(status_code=404, detail="Liability not found")
     changes = update_data.model_dump(exclude_unset=True)
     changes.update(_emi_from_tenure(changes, current))
+    changes.update(_emi_day_change(current, changes))
     liability = db.update_liability(liability_id, user_id, changes)
     extra = _liability_defaults(liability)
     if extra:
@@ -622,11 +773,26 @@ async def export_user_data(user_id: str = Depends(get_user_id)):
         }
     )
 
+UPLOAD_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_upload(file: UploadFile, limit: int) -> bytes:
+    """The upload's bytes, read a chunk at a time: at most limit + 1 are kept, enough for parse_backup to see the
+    file is too large without holding a huge upload in memory."""
+    chunks, size = [], 0
+    while size <= limit:
+        chunk = await file.read(min(UPLOAD_CHUNK_BYTES, limit + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
+
 @app.post("/api/restore")
 async def restore_user_data(file: UploadFile = File(...), user_id: str = Depends(get_user_id)):
     """Replace all of the current user's data with a backup file. Nothing is written unless the whole file is valid."""
     try:
-        cleaned = restore.parse_backup(await file.read())
+        cleaned = restore.parse_backup(await _read_upload(file, restore.MAX_BACKUP_BYTES))
     except restore.RestoreError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     # The write-time rules of POST /api/assets: a restored backup must not hold what the API would refuse or leave undated.
@@ -1075,9 +1241,10 @@ async def update_mutual_fund(fund_id: str, update_data: MutualFundUpdate, user_i
             merged = await _process_mutual_fund_data(merged)
             _reject_oversized_fund(merged)
         merged.update(changes)
+    # Fetching NAVs takes a while: a refresh or another edit may have landed meanwhile, and the whole row worked out
+    # from the copy read before must not overwrite it (the same rule as _store_refresh)
+    _check_unchanged(existing, db.get_mutual_fund_by_id(fund_id, user_id), "Mutual fund")
     fund = db.update_mutual_fund(fund_id, user_id, merged)
-    if not fund:  # deleted while the NAVs were being fetched
-        raise HTTPException(status_code=404, detail="Mutual fund not found")
     return valuation.fund_view(fund, valuation.today())
 
 @app.delete("/api/mutual-funds/{fund_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1129,28 +1296,39 @@ async def refresh_fund_nav(fund_id: str, user_id: str = Depends(get_user_id)):
     return {"status": "error", "message": "Could not fetch NAV for this fund"}
 
 @app.get("/api/nav/search")
-async def search_nav(q: str):
+async def search_nav(q: str = Query(..., min_length=1, max_length=nav_service.MAX_SEARCH_LENGTH),
+                     user_id: str = Depends(get_user_id)):
     """Search for mutual funds by name to get scheme codes"""
     results = await nav_service.search_mutual_fund(q)
     return results
 
 @app.get("/api/nav/test")
-async def test_nav_service():
+async def test_nav_service(user_id: str = Depends(get_user_id)):
     """Test if NAV service is working"""
     return await nav_service.test_nav_service()
 
 # ============== Equity Routes ==============
 
+async def _fetch_price_info(symbol: str, market: str, quantity: float) -> Optional[dict]:
+    """The live price lookup for a holding, or None when it failed or its price can't be stored: not a finite
+    number above zero, or so large that the holding's value would pass the input limits. The lookup blocks, so it
+    runs in a worker thread instead of holding up every other request."""
+    price_info = await run_in_threadpool(stock_service.fetch_stock_price, symbol, market)
+    price = price_info.get("current_price") if price_info else None
+    if not stock_service.valid_price(price) or not quantity * price <= MAX_AMOUNT:
+        return None
+    return price_info
+
 @app.get("/api/equities", response_model=List[Equity])
 async def get_equities(user_id: str = Depends(get_user_id), refresh_prices: bool = False):
     """Get all equities for current user. Set refresh_prices=true to fetch live prices."""
     equities = db.get_equities_by_user(user_id)
-    
+
     if refresh_prices and equities:
         missed = []
         for equity in equities:
-            price_info = stock_service.fetch_stock_price(equity["symbol"], equity["market"])
-            if price_info and price_info.get("current_price"):
+            price_info = await _fetch_price_info(equity["symbol"], equity["market"], equity["quantity"])
+            if price_info:
                 db.update_equity_price(equity["id"], user_id, price_info["current_price"])
             else:
                 missed.append(equity["symbol"])
@@ -1164,13 +1342,13 @@ async def get_equities(user_id: str = Depends(get_user_id), refresh_prices: bool
 async def create_equity(equity_data: EquityCreate, user_id: str = Depends(get_user_id)):
     """Create a new equity holding"""
     # Try to fetch current price
-    price_info = stock_service.fetch_stock_price(equity_data.symbol, equity_data.market.value)
-    
+    price_info = await _fetch_price_info(equity_data.symbol, equity_data.market.value, equity_data.quantity)
+
     data = equity_data.model_dump()
     if price_info:
-        data["current_price"] = price_info.get("current_price", equity_data.avg_buy_price)
+        data["current_price"] = price_info["current_price"]
         if not data.get("company_name") and price_info.get("company_name"):
-            data["company_name"] = price_info["company_name"]
+            data["company_name"] = price_info["company_name"][:150]
     else:
         data["current_price"] = equity_data.avg_buy_price
         _warn_stock_price(equity_data.symbol)
@@ -1207,12 +1385,14 @@ async def refresh_equity_price(equity_id: str, user_id: str = Depends(get_user_i
     if not equity:
         raise HTTPException(status_code=404, detail="Equity not found")
     
-    price_info = stock_service.fetch_stock_price(equity["symbol"], equity["market"])
-    if price_info and price_info.get("current_price"):
+    price_info = await _fetch_price_info(equity["symbol"], equity["market"], equity["quantity"])
+    if price_info:
         equity = db.update_equity_price(equity_id, user_id, price_info["current_price"])
     else:
         _warn_stock_price(equity["symbol"])
-    
+        equity = db.get_equity_by_id(equity_id, user_id)
+    if not equity:  # deleted while the price was being fetched
+        raise HTTPException(status_code=404, detail="Equity not found")
     return equity
 
 @app.get("/api/equities-summary")
@@ -1236,10 +1416,12 @@ async def get_equities_summary(user_id: str = Depends(get_user_id)):
     }
 
 @app.get("/api/stock-price/{market}/{symbol}")
-async def get_stock_price(market: str, symbol: str):
+async def get_stock_price(market: StockMarket, symbol: str = Path(..., max_length=100),
+                          user_id: str = Depends(get_user_id)):
     """Get live stock price for a symbol"""
-    price_info = stock_service.fetch_stock_price(symbol, market)
-    if not price_info:
+    market = market.value
+    price_info = await run_in_threadpool(stock_service.fetch_stock_price, symbol, market)
+    if not price_info or not stock_service.valid_price(price_info.get("current_price")):
         # A lookup, not a holding: nothing's value falls back. The symbol comes from the path, so it is cut short.
         user_warnings.warn(f"Couldn't fetch the price of {symbol[:20]} right now.")
         raise HTTPException(status_code=404, detail=f"Could not fetch price for {symbol} on {market}")
@@ -1301,8 +1483,7 @@ async def _seed_demo_history(user_id: str, on) -> None:
             timestamp=f"{valuation.add_months(this_month, -months_back).isoformat()}T00:00:00",
         )
 
-# Startup event to create demo data
-@app.on_event("startup")
+# Startup (run by the lifespan handler at the top) to create demo data
 async def startup_event():
     """Create demo user and sample data on startup (only if CREATE_DEMO_DATA=true)"""
     if not settings.CREATE_DEMO_DATA:
@@ -1378,6 +1559,8 @@ async def startup_event():
     # Add sample bank accounts if none exist
     existing_accounts = db.get_bank_accounts_by_user(user_id)
     if not existing_accounts:
+        # Fake demo values: these account numbers, branches and IFSC codes (like the policy and folio numbers
+        # below) are made up and belong to no real account; the bank names are only there to look familiar
         sample_bank_accounts = [
             {"bank_name": "HDFC Bank", "account_number": "50100123456789", "account_type": "savings", "balance": 250000, "branch": "Koramangala Branch", "ifsc_code": "HDFC0001234"},
             {"bank_name": "SBI", "account_number": "38756432198", "account_type": "salary", "balance": 85000, "branch": "Indiranagar Branch", "ifsc_code": "SBIN0005678"},

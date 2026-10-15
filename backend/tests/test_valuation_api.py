@@ -77,6 +77,48 @@ def test_a_rate_change_from_the_last_emi_date_keeps_todays_outstanding(client, a
     assert resp.json()["payoff_date"] > payoff_date
 
 
+@pytest.mark.parametrize("day", [29, 30, 31])
+def test_re_anchoring_a_month_end_loan_on_a_short_month_keeps_its_emi_day(client, auth_headers, frozen_today, day):
+    # Dated the 29th-31st, the loan's February EMI falls on the 28th; re-anchoring there must not move later EMIs to
+    # the 28th, which would take a March EMI on the 28th that the loan doesn't owe until the 29th-31st
+    frozen_today["date"] = date(2026, 3, 28)
+    loan = post(client, auth_headers, "/api/liabilities",
+                {"name": "Test loan", "amount": 1_000_000, "category": "personal_loan", "interest_rate": 12,
+                 "emi": 50_000, "balance_date": f"2026-01-{day}"})
+    outstanding, last_emi_date, payoff_date = loan["outstanding"], loan["last_emi_date"], loan["payoff_date"]
+    assert last_emi_date == "2026-02-28"
+
+    resp = client.put(f"/api/liabilities/{loan['id']}", headers=auth_headers,
+                      json={"amount": outstanding, "balance_date": last_emi_date})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["outstanding"] == pytest.approx(outstanding, abs=0.01)
+    assert resp.json()["payoff_date"] == payoff_date
+    frozen_today["date"] = date(2026, 3, day)
+    after = client.get(f"/api/liabilities/{loan['id']}", headers=auth_headers).json()
+    assert after["last_emi_date"] == f"2026-03-{day}"
+    assert after["outstanding"] == pytest.approx(outstanding * 1.01 - 50_000, abs=0.01)
+    # Restoring a backup keeps the EMI day too
+    backup = client.get("/api/export", headers=auth_headers).content
+    client.post("/api/restore", headers=auth_headers, files={"file": ("backup.json", backup, "application/json")})
+    [restored] = client.get("/api/liabilities", headers=auth_headers).json()
+    assert restored["last_emi_date"] == f"2026-03-{day}"
+
+
+def test_a_balance_date_off_the_emi_schedule_starts_a_new_emi_day(client, auth_headers, frozen_today):
+    frozen_today["date"] = date(2026, 3, 28)
+    loan = post(client, auth_headers, "/api/liabilities",
+                {"name": "Test loan", "amount": 1_000_000, "category": "personal_loan", "interest_rate": 12,
+                 "emi": 50_000, "balance_date": "2026-01-31"})
+    client.put(f"/api/liabilities/{loan['id']}", headers=auth_headers,
+               json={"amount": 900_000, "balance_date": "2026-02-28"})
+
+    resp = client.put(f"/api/liabilities/{loan['id']}", headers=auth_headers,
+                      json={"amount": 900_000, "balance_date": "2026-02-27"})
+
+    assert resp.json()["last_emi_date"] == "2026-03-27"
+
+
 def test_a_tenure_that_gives_a_zero_emi_is_rejected_before_anything_is_saved(client, auth_headers, frozen_today):
     resp = client.post("/api/liabilities", headers=auth_headers, json={**LOAN, "amount": 0, "tenure_months": 12})
 

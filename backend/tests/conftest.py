@@ -28,6 +28,19 @@ def non_utc_timezone():
         time.tzset()
 
 
+@pytest.fixture(autouse=True)
+def fresh_login_limits():
+    """Every test starts with no failed logins counted (the limiter is in memory, and every test client shares
+    one address) and no per-user locks bound to an earlier test's event loop."""
+    import login_limiter
+    import main
+
+    login_limiter.clear()
+    main._password_check_locks.clear()
+    yield
+    login_limiter.clear()
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """TestClient backed by a throwaway data file."""
@@ -48,12 +61,14 @@ def auth_headers(client):
 
 @pytest.fixture
 def clock(monkeypatch):
-    """Freeze main._now(); move time by assigning clock["now"]."""
+    """Freeze main._now() and the login limiter's clock; move time by assigning clock["now"]."""
+    import login_limiter
     import main
     from totp_helpers import NOW
 
     state = {"now": NOW}
     monkeypatch.setattr(main, "_now", lambda: state["now"])
+    monkeypatch.setattr(login_limiter, "_clock", lambda: state["now"].timestamp())
     return state
 
 

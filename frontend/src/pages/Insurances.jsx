@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { insurancesAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
 import { 
   Plus, 
   Edit2, 
@@ -17,6 +19,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { errorMessage } from '../utils/errors';
+import { formatDate, daysUntil } from '../utils/dates';
 
 const INSURANCE_TYPES = [
   { value: 'life', label: 'Life Insurance', icon: Heart, color: 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400' },
@@ -38,28 +41,9 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
-const formatDate = (dateStr) => {
-  if (!dateStr) return '';
-  return new Date(dateStr).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
-};
-
-const getDaysUntilExpiry = (dateStr) => {
-  if (!dateStr) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const expiry = new Date(dateStr);
-  expiry.setHours(0, 0, 0, 0);
-  const diffTime = expiry - today;
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
-};
-
+// Policy dates are YYYY-MM-DD and are parsed as local dates (utils/dates), not UTC
 const getExpiryStatus = (dateStr) => {
-  const days = getDaysUntilExpiry(dateStr);
+  const days = daysUntil(dateStr);
   if (days === null) return { label: '', color: '' };
   if (days < 0) return { label: 'Expired', color: 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30' };
   if (days <= 30) return { label: `Expires in ${days} days`, color: 'text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30' };
@@ -86,6 +70,8 @@ export default function Insurances() {
     notes: ''
   });
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
   const fetchInsurances = async () => {
@@ -93,9 +79,11 @@ export default function Insurances() {
       setLoading(true);
       const response = await insurancesAPI.getAll();
       setInsurances(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load insurances');
+      setPageError({ message: errorMessage(err, 'Failed to load insurances'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -197,7 +185,7 @@ export default function Insurances() {
       await insurancesAPI.delete(id);
       fetchInsurances();
     } catch (err) {
-      setError('Failed to delete insurance');
+      setPageError({ message: errorMessage(err, 'Failed to delete insurance'), retry: false });
     }
   };
 
@@ -213,7 +201,7 @@ export default function Insurances() {
   }, 0);
   const totalCoverage = insurances.reduce((sum, ins) => sum + ins.sum_assured, 0);
   const expiringCount = insurances.filter(ins => {
-    const days = getDaysUntilExpiry(ins.end_date);
+    const days = daysUntil(ins.end_date);
     return days !== null && days >= 0 && days <= 90;
   }).length;
 
@@ -239,6 +227,12 @@ export default function Insurances() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchInsurances : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="card bg-gradient-to-r from-green-500 to-green-600 text-white">
@@ -249,7 +243,7 @@ export default function Insurances() {
                 <AnimatedNumber 
                   value={totalCoverage} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -267,7 +261,7 @@ export default function Insurances() {
                 <AnimatedNumber 
                   value={totalPremium} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -282,7 +276,7 @@ export default function Insurances() {
             <div>
               <p className="text-orange-100 font-medium">Expiring Soon</p>
               <p className="text-2xl font-bold mt-1">
-                <AnimatedNumber value={expiringCount} formatter={(v) => Math.round(v).toString()} />
+                <AnimatedNumber value={expiringCount} formatter={(v) => Math.round(v).toString()} privacyMask={loaded ? null : '—'} />
               </p>
               <p className="text-orange-100 text-sm">within 90 days</p>
             </div>
@@ -294,7 +288,7 @@ export default function Insurances() {
       </div>
 
       {/* Insurance List */}
-      {insurances.length === 0 ? (
+      {insurances.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <Shield className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white">No insurance policies yet</h3>
@@ -449,6 +443,7 @@ export default function Insurances() {
                     onChange={(e) => setFormData({ ...formData, premium: e.target.value })}
                     required
                   />
+                  <AmountHint value={formData.premium} />
                 </div>
                 <div>
                   <label className="label">Frequency</label>
@@ -473,6 +468,7 @@ export default function Insurances() {
                     onChange={(e) => setFormData({ ...formData, sum_assured: e.target.value })}
                     required
                   />
+                  <AmountHint value={formData.sum_assured} />
                 </div>
               </div>
 

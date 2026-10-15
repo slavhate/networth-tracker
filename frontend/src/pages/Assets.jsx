@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { assetsAPI, npsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
 import NpsSchemesEditor, { schemeRowsError } from '../components/NpsSchemesEditor';
 import NpsSchemeLines from '../components/NpsSchemeLines';
 import {
@@ -56,6 +58,8 @@ export default function Assets() {
   // themselves ('typed'), theirs stands.
   const [anchorState, setAnchorState] = useState('stored');
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
   const [npsSchemes, setNpsSchemes] = useState(null);       // the scheme list, once loaded
   const [npsSchemesError, setNpsSchemesError] = useState('');
@@ -68,10 +72,12 @@ export default function Assets() {
       setLoading(true);
       const response = await assetsAPI.getAll();
       setAssets(response.data);
+      setLoaded(true);
+      setPageError(null);
       refreshStaleNps(response.data);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load assets');
+      setPageError({ message: errorMessage(err, 'Failed to load assets'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -251,7 +257,7 @@ export default function Assets() {
       await assetsAPI.delete(id);
       fetchAssets();
     } catch (err) {
-      setError('Failed to delete asset');
+      setPageError({ message: errorMessage(err, 'Failed to delete asset'), retry: false });
     }
   };
 
@@ -284,6 +290,12 @@ export default function Assets() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchAssets : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Card */}
       <div className="card bg-gradient-to-r from-primary-500 to-primary-600 text-white">
         <div className="flex items-center justify-between">
@@ -293,7 +305,7 @@ export default function Assets() {
               <AnimatedNumber 
                 value={totalAssets} 
                 formatter={formatCurrencyRaw}
-                privacyMask={privacyMode ? '₹ ••••••' : null}
+                privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
               />
             </p>
           </div>
@@ -304,7 +316,7 @@ export default function Assets() {
       </div>
 
       {/* Assets List */}
-      {assets.length === 0 ? (
+      {assets.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <Wallet className="w-16 h-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-medium text-gray-900">No assets yet</h3>
@@ -336,7 +348,7 @@ export default function Assets() {
                     )}
                     {categoryInfo.kind === 'quantity' && asset.quantity != null && asset.unit_price != null && (
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        {asset.quantity} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
+                        {privacyMode ? '••' : asset.quantity} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
                       </p>
                     )}
                     {categoryInfo.kind === 'nps' && asset.valuation_date
@@ -470,6 +482,7 @@ export default function Assets() {
                       }}
                       required
                     />
+                    <AmountHint value={formData.value} />
                   </div>
 
                   <div>
@@ -504,6 +517,7 @@ export default function Assets() {
                       }}
                       required
                     />
+                    <AmountHint value={formData.value} />
                   </div>
 
                   <div>
@@ -535,6 +549,7 @@ export default function Assets() {
                       value={formData.monthly_contribution}
                       onChange={(e) => setFormData(reanchorContribution({ ...formData, monthly_contribution: e.target.value }))}
                     />
+                    <AmountHint value={formData.monthly_contribution} />
                   </div>
 
                   <div>
@@ -577,6 +592,7 @@ export default function Assets() {
                       }}
                       required
                     />
+                    <AmountHint value={formData.value} />
                   </div>
 
                   <div>
@@ -604,6 +620,7 @@ export default function Assets() {
                       value={formData.monthly_contribution}
                       onChange={(e) => setFormData({ ...formData, monthly_contribution: e.target.value })}
                     />
+                    <AmountHint value={formData.monthly_contribution} />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -618,6 +635,7 @@ export default function Assets() {
                         value={formData.yearly_contribution}
                         onChange={(e) => setFormData({ ...formData, yearly_contribution: e.target.value })}
                       />
+                      <AmountHint value={formData.yearly_contribution} />
                     </div>
                     <div>
                       <label className="label">Paid in</label>

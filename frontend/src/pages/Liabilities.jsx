@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { liabilitiesAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
 import LoanScheduleModal from '../components/LoanScheduleModal';
 import { 
   Plus, 
@@ -62,6 +64,8 @@ export default function Liabilities() {
   const [tenureDriven, setTenureDriven] = useState(false);
   const [scheduleFor, setScheduleFor] = useState(null);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
   const fetchLiabilities = async () => {
@@ -69,9 +73,11 @@ export default function Liabilities() {
       setLoading(true);
       const response = await liabilitiesAPI.getAll();
       setLiabilities(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load liabilities');
+      setPageError({ message: errorMessage(err, 'Failed to load liabilities'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -149,7 +155,7 @@ export default function Liabilities() {
       await liabilitiesAPI.delete(id);
       fetchLiabilities();
     } catch (err) {
-      setError('Failed to delete liability');
+      setPageError({ message: errorMessage(err, 'Failed to delete liability'), retry: false });
     }
   };
 
@@ -201,6 +207,12 @@ export default function Liabilities() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchLiabilities : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="card bg-gradient-to-r from-orange-500 to-red-500 text-white">
@@ -211,7 +223,7 @@ export default function Liabilities() {
                 <AnimatedNumber 
                   value={totalLiabilities} 
                   formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
                 />
               </p>
             </div>
@@ -229,6 +241,7 @@ export default function Liabilities() {
                 <AnimatedNumber 
                   value={avgInterestRate || 0} 
                   formatter={(v) => v ? `${v.toFixed(1)}%` : 'N/A'}
+                  privacyMask={loaded ? null : '—'}
                 />
               </p>
             </div>
@@ -240,7 +253,7 @@ export default function Liabilities() {
       </div>
 
       {/* Liabilities List */}
-      {liabilities.length === 0 ? (
+      {liabilities.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <CreditCard className="w-16 h-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-medium text-gray-900">No liabilities yet</h3>
@@ -266,7 +279,7 @@ export default function Liabilities() {
                     <h3 className="font-semibold text-gray-900 dark:text-white">{liability.name}</h3>
                     <div className="flex items-center gap-3 text-sm text-gray-500">
                       <span>{categoryInfo.label}</span>
-                      {liability.interest_rate && (
+                      {liability.interest_rate != null && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
                           {liability.interest_rate}% APR
                         </span>
@@ -376,6 +389,7 @@ export default function Liabilities() {
                   }}
                   required
                 />
+                <AmountHint value={formData.amount} />
               </div>
 
               <div>
@@ -443,6 +457,7 @@ export default function Liabilities() {
                       setFormData(reanchor({ ...formData, emi: e.target.value, tenure_months: '' }));
                     }}
                   />
+                  <AmountHint value={formData.emi} />
                 </div>
                 <div>
                   <label className="label">…or tenure (months)</label>
