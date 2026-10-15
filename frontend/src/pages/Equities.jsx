@@ -2,12 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { equitiesAPI, exchangeAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { formatShortINR } from '../utils/indianNumbers';
+import { formatShortINR, formatCompactINR } from '../utils/indianNumbers';
+import { ItemTileGrid } from '../components/ItemTile';
+import HoldingTile from '../components/HoldingTile';
 import PageError from '../components/PageError';
 import { 
   Plus, 
-  Edit2, 
-  Trash2, 
   X, 
   TrendingUp,
   TrendingDown,
@@ -353,72 +353,72 @@ export default function Equities() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {equities.map((equity) => {
             const marketInfo = getMarketInfo(equity.market);
             const isPositive = equity.gain_loss >= 0;
-            
+            const usd = isUsdMarket(equity.market);
+            const nameHint = [equity.company_name, equity.notes].filter(Boolean).join('\n') || undefined;
+            // INR holdings show the short lakh/crore figure with the full amount on hover; US holdings show dollars
+            // with the rupee equivalent beside them. Privacy mode shows the mask and no hover text.
+            const value = privacyMode
+              ? formatCurrency(equity.current_value, equity.market)
+              : usd ? formatCurrencyRaw(equity.current_value, equity.market) : formatShortINR(equity.current_value);
+            const valueInr = usd ? equity.current_value * usdToInr : equity.current_value;
+            const gainAmount = privacyMode
+              ? formatCurrency(Math.abs(equity.gain_loss), equity.market)
+              : usd ? formatCurrencyRaw(Math.abs(equity.gain_loss), equity.market) : formatCompactINR(Math.abs(equity.gain_loss));
+            const invested = privacyMode
+              ? formatCurrency(equity.invested_amount, equity.market)
+              : usd ? formatCurrencyRaw(equity.invested_amount, equity.market) : formatShortINR(equity.invested_amount);
+            const plainHint = (text) => (privacyMode ? undefined : text);
+
             return (
-              <div key={equity.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${marketInfo.color}`}>
-                    <span className="font-bold text-sm">{equity.symbol.substring(0, 3)}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-gray-900 dark:text-white">{equity.symbol}</h3>
-                      <span className={`px-2 py-0.5 rounded text-xs ${marketInfo.color}`}>{equity.market}</span>
-                    </div>
-                    {equity.company_name && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400">{equity.company_name}</p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mt-2">
-                      <span className="text-gray-500 dark:text-gray-400">
-                        Qty: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '••' : equity.quantity}</span>
-                      </span>
-                      <span className="text-gray-500 dark:text-gray-400">
-                        Avg: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(equity.avg_buy_price, equity.market)}</span>
-                      </span>
-                      <span className="text-gray-500 dark:text-gray-400">
-                        LTP: <span className="text-gray-900 dark:text-white font-medium">
-                          {/* No price yet is shown as a dash, not as a zero price */}
-                          {equity.current_price == null && !privacyMode ? '—' : formatCurrency(equity.current_price, equity.market)}
-                        </span>
-                      </span>
-                    </div>
-                    {equity.notes && (
-                      <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">{equity.notes}</p>
-                    )}
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(equity.current_value, equity.market)}</p>
-                    <p className={`text-sm font-medium flex items-center justify-end gap-1 ${isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                      {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                      {formatCurrency(Math.abs(equity.gain_loss), equity.market)} ({formatPercent(equity.gain_loss_percent)})
-                    </p>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                      Invested: {formatCurrency(equity.invested_amount, equity.market)}
-                    </p>
-                  </div>
-                  <div className="flex gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => openModal(equity)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(equity.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <HoldingTile
+                key={equity.id}
+                badgeColor={marketInfo.color}
+                badge={<span className="font-bold text-sm">{equity.symbol.substring(0, 3)}</span>}
+                title={(
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="truncate">{equity.symbol}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium shrink-0 ${marketInfo.color}`}>{equity.market}</span>
+                  </span>
+                )}
+                titleHint={nameHint ? `${equity.symbol}\n${nameHint}` : equity.symbol}
+                subtitle={equity.company_name}
+                subtitleHint={nameHint}
+                itemLabel={equity.symbol}
+                onEdit={() => openModal(equity)}
+                onDelete={() => handleDelete(equity.id)}
+                value={value}
+                valueHint={privacyMode || usd ? undefined : formatCurrencyRaw(equity.current_value)}
+                valueSuffix={usd && !privacyMode && (
+                  <span className="text-sm text-gray-400 dark:text-gray-500 whitespace-nowrap" title={formatCurrencyRaw(valueInr)}>
+                    ≈ {formatShortINR(valueInr)}
+                  </span>
+                )}
+                gainPositive={isPositive}
+                gainText={`${gainAmount} (${formatPercent(equity.gain_loss_percent)})`}
+                stats={[
+                  { label: 'Qty', value: privacyMode ? '••' : equity.quantity, hint: plainHint(String(equity.quantity)) },
+                  {
+                    label: 'Avg buy',
+                    value: formatCurrency(equity.avg_buy_price, equity.market),
+                    hint: plainHint(formatCurrencyRaw(equity.avg_buy_price, equity.market)),
+                  },
+                  {
+                    label: 'Last price',
+                    // No price yet is shown as a dash, not as a zero price
+                    value: equity.current_price == null && !privacyMode ? '—' : formatCurrency(equity.current_price, equity.market),
+                    hint: equity.current_price == null ? undefined : plainHint(formatCurrencyRaw(equity.current_price, equity.market)),
+                  },
+                ]}
+                footer={`Invested ${invested}`}
+                footerHint={plainHint(`Invested ${formatCurrencyRaw(equity.invested_amount, equity.market)}`)}
+              />
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}

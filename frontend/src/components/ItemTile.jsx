@@ -48,7 +48,7 @@ export default function ItemTile({
   const shown = privacyMode ? amount : formatShortINR(amountValue);
   const fullAmount = privacyMode ? undefined : amount;
   return (
-    <div className="card !p-5 h-full flex hover:shadow-md transition-shadow">
+    <div className="card !p-5 h-full min-w-0 flex hover:shadow-md transition-shadow">
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-start justify-between gap-2">
           <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${iconColor}`}>

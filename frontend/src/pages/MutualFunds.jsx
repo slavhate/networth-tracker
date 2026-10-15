@@ -2,14 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 import { mutualFundsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { formatShortINR } from '../utils/indianNumbers';
+import { formatShortINR, formatCompactINR } from '../utils/indianNumbers';
 import PageError from '../components/PageError';
 import AmountHint from '../components/AmountHint';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import { ItemTileGrid } from '../components/ItemTile';
+import HoldingTile from '../components/HoldingTile';
+import {
+  Plus,
+  X,
+  Repeat,
   TrendingUp,
   TrendingDown,
   BarChart3,
@@ -24,12 +25,12 @@ import { errorMessage } from '../utils/errors';
 import { todayIso, formatDate } from '../utils/dates';
 
 const FUND_CATEGORIES = [
-  { value: 'equity', label: 'Equity', icon: TrendingUp, color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
-  { value: 'debt', label: 'Debt', icon: LineChart, color: 'bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-400' },
-  { value: 'hybrid', label: 'Hybrid', icon: PieChart, color: 'bg-purple-100 text-purple-600 dark:bg-purple-900/50 dark:text-purple-400' },
-  { value: 'index', label: 'Index Fund', icon: BarChart3, color: 'bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400' },
-  { value: 'elss', label: 'ELSS (Tax Saver)', icon: Target, color: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400' },
-  { value: 'liquid', label: 'Liquid Fund', icon: Wallet, color: 'bg-teal-100 text-teal-600 dark:bg-teal-900/50 dark:text-teal-400' },
+  { value: 'equity', label: 'Equity', short: 'Equity', icon: TrendingUp, color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
+  { value: 'debt', label: 'Debt', short: 'Debt', icon: LineChart, color: 'bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-400' },
+  { value: 'hybrid', label: 'Hybrid', short: 'Hybrid', icon: PieChart, color: 'bg-purple-100 text-purple-600 dark:bg-purple-900/50 dark:text-purple-400' },
+  { value: 'index', label: 'Index Fund', short: 'Index', icon: BarChart3, color: 'bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400' },
+  { value: 'elss', label: 'ELSS (Tax Saver)', short: 'ELSS', icon: Target, color: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400' },
+  { value: 'liquid', label: 'Liquid Fund', short: 'Liquid', icon: Wallet, color:'bg-teal-100 text-teal-600 dark:bg-teal-900/50 dark:text-teal-400' },
 ];
 
 const getCategoryInfo = (value) => FUND_CATEGORIES.find(c => c.value === value) || FUND_CATEGORIES[0];
@@ -417,7 +418,7 @@ export default function MutualFunds() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {funds.map((fund) => {
             const categoryInfo = getCategoryInfo(fund.category);
             const CategoryIcon = categoryInfo.icon;
@@ -429,76 +430,65 @@ export default function MutualFunds() {
               ? ((currentVal - invested) / invested) * 100
               : 0;
             const isPositive = returnAmount >= 0;
-            
+            // The folio shows only its last 4 characters
+            const folio = fund.folio_number ? `Folio ••${String(fund.folio_number).slice(-4)}` : '';
+            const amcLine = [fund.amc, folio].filter(Boolean).join(' · ');
+            const sipActive = fund.sip_amount > 0;
+            const sipText = sipActive ? sipSummary(fund) : '';
+            const avgNav = !sipActive && fund.avg_nav > 0
+              ? `Avg NAV ${privacyMode ? '₹ ••' : `₹${fund.avg_nav.toFixed(2)}`}`
+              : '';
+
             return (
-              <div key={fund.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${categoryInfo.color}`}>
-                    <CategoryIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{fund.fund_name}</h3>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500 dark:text-gray-400 mt-1">
-                      <span>{fund.amc}</span>
-                      <span>•</span>
-                      <span className={`px-2 py-0.5 rounded text-xs ${categoryInfo.color}`}>{categoryInfo.label}</span>
-                      {fund.folio_number && (
-                        <>
-                          <span>•</span>
-                          <span>Folio: {fund.folio_number}</span>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mt-2">
-                      <span className="text-gray-500 dark:text-gray-400">
-                        Invested: <span className="text-gray-900 dark:text-white font-medium">{formatCurrency(invested)}</span>
-                      </span>
-                      {units > 0 && (
-                        <span className="text-gray-500 dark:text-gray-400">
-                          Units: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '••' : units.toFixed(3)}</span>
-                        </span>
-                      )}
-                      {fund.avg_nav > 0 && !(fund.sip_amount > 0) && (
-                        <span className="text-gray-500 dark:text-gray-400">
-                          Avg NAV: <span className="text-gray-900 dark:text-white font-medium">{privacyMode ? '₹ ••' : `₹${fund.avg_nav.toFixed(2)}`}</span>
-                        </span>
-                      )}
-                      {fund.current_nav > 0 && (
-                        <span className="text-gray-500 dark:text-gray-400">
-                          Current NAV: <span className="text-green-600 dark:text-green-400 font-medium">{privacyMode ? '₹ ••' : `₹${fund.current_nav.toFixed(2)}`}</span>
-                        </span>
-                      )}
-                    </div>
-                    {fund.sip_amount > 0 && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{sipSummary(fund)}</p>
-                    )}
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(currentVal)}</p>
-                    <p className={`text-sm font-medium flex items-center justify-end gap-1 ${isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                      {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                      {formatCurrency(Math.abs(returnAmount))} ({formatPercent(returnPercent)})
-                    </p>
-                  </div>
-                  <div className="flex gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => openModal(fund)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(fund.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <HoldingTile
+                key={fund.id}
+                badgeColor={categoryInfo.color}
+                badge={<CategoryIcon className="w-5 h-5" />}
+                title={fund.fund_name}
+                titleHint={fund.fund_name}
+                titleClamp
+                subtitle={(
+                  <>
+                    <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium mr-1.5 ${categoryInfo.color}`}>{categoryInfo.short}</span>
+                    {amcLine}
+                  </>
+                )}
+                subtitleHint={`${categoryInfo.label} · ${amcLine}`}
+                itemLabel={fund.fund_name}
+                onEdit={() => openModal(fund)}
+                onDelete={() => handleDelete(fund.id)}
+                value={privacyMode ? formatCurrency(currentVal) : formatShortINR(currentVal)}
+                valueHint={privacyMode ? undefined : formatCurrencyRaw(currentVal)}
+                gainPositive={isPositive}
+                gainText={`${privacyMode ? formatCurrency(Math.abs(returnAmount)) : formatCompactINR(Math.abs(returnAmount))} (${formatPercent(returnPercent)})`}
+                stats={[
+                  {
+                    label: 'Invested',
+                    value: privacyMode ? formatCurrency(invested) : formatShortINR(invested),
+                    hint: privacyMode ? undefined : formatCurrencyRaw(invested),
+                  },
+                  {
+                    label: 'Units',
+                    value: privacyMode ? '••' : (units > 0 ? units.toFixed(3) : '—'),
+                    hint: privacyMode || !(units > 0) ? undefined : units.toFixed(3),
+                  },
+                  {
+                    label: 'NAV',
+                    value: privacyMode ? '₹ ••' : (fund.current_nav > 0 ? `₹${fund.current_nav.toFixed(2)}` : '—'),
+                    hint: privacyMode || !(fund.current_nav > 0) ? undefined : `₹${fund.current_nav}`,
+                  },
+                ]}
+                footer={sipActive ? (
+                  <>
+                    <Repeat className="w-3 h-3 inline mr-1 -mt-0.5" />
+                    {sipText}
+                  </>
+                ) : avgNav}
+                footerHint={sipActive ? sipText : avgNav || undefined}
+              />
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}
