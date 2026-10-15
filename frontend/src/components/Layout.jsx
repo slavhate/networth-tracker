@@ -4,6 +4,11 @@ import { useTheme } from '../ThemeContext';
 import { usePrivacy } from '../PrivacyContext';
 import { exportAPI } from '../api';
 import { generateReport } from '../utils/reportGenerator';
+import { downloadBlob, downloadJson } from '../utils/download';
+import { todayIso } from '../utils/dates';
+import { errorMessage } from '../utils/errors';
+import { looksLikeBackup } from '../utils/backup';
+import RestoreDialog from './RestoreDialog';
 import {
   LayoutDashboard,
   Wallet,
@@ -28,7 +33,7 @@ import {
   CheckCircle,
   Printer
 } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const formatLastUpdated = (date) => {
   if (!date) return 'Never';
@@ -49,8 +54,8 @@ export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
+  const [restoreResult, setRestoreResult] = useState(null);
+  const [pendingRestore, setPendingRestore] = useState(null); // { file, backup } while the confirm dialog is open
   const fileInputRef = useRef(null);
   const [reporting, setReporting] = useState(false);
   const [printError, setPrintError] = useState(null);
@@ -64,17 +69,10 @@ export default function Layout() {
     try {
       setExporting(true);
       const response = await exportAPI.download();
-      const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `networth_backup_${new Date().toISOString().slice(0,10)}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      // Named with the local date, like every other date in the app
+      downloadJson(response.data, `networth_backup_${todayIso()}.json`);
     } catch (err) {
-      console.error('Export failed:', err);
+      showRestoreResult(false, errorMessage(err, 'Backup failed. Please try again.'), 5000);
     } finally {
       setExporting(false);
     }
@@ -85,17 +83,9 @@ export default function Layout() {
       setReporting(true);
       setPrintError(null);
       const html = await generateReport(privacyMode);
-      const blob = new Blob([html], { type: 'text/html' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `networth-report-${new Date().toISOString().slice(0, 10)}.html`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Print report failed:', err);
+      // downloadBlob revokes the URL only after a delay, so the browser has finished with it
+      downloadBlob(new Blob([html], { type: 'text/html' }), `networth-report-${todayIso()}.html`);
+    } catch {
       setPrintError('Report generation failed. Please try again.');
       setTimeout(() => setPrintError(null), 4000);
     } finally {
@@ -107,42 +97,51 @@ export default function Layout() {
     fileInputRef.current?.click();
   };
 
+  // One status message at a time: a new one restarts the timer instead of being cleared early by the previous timer
+  const resultTimer = useRef(null);
+  useEffect(() => () => clearTimeout(resultTimer.current), []);
+  const showRestoreResult = (success, message, duration = 3000) => {
+    clearTimeout(resultTimer.current);
+    setRestoreResult({ success, message });
+    resultTimer.current = setTimeout(() => setRestoreResult(null), duration);
+  };
+
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
+    // Reset so picking the same file again still fires onChange
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     if (!file) return;
 
-    // Validate file type
-    if (!file.name.endsWith('.json')) {
-      setImportResult({ success: false, message: 'Please select a JSON file' });
-      setTimeout(() => setImportResult(null), 3000);
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      showRestoreResult(false, 'Please select a JSON file');
       return;
     }
 
+    let backup;
     try {
-      setImporting(true);
-      setImportResult(null);
-      const response = await exportAPI.import(file);
-      setImportResult({ 
-        success: true, 
-        message: `Imported ${response.data.details.assets} assets, ${response.data.details.liabilities} liabilities, ${response.data.details.bank_accounts} bank accounts, ${response.data.details.mutual_funds} mutual funds, ${response.data.details.equities} equities` 
-      });
-      updateLastUpdated();
-      // Refresh the page after successful import
-      setTimeout(() => {
-        setImportResult(null);
-        window.location.reload();
-      }, 2000);
-    } catch (err) {
-      console.error('Import failed:', err);
-      setImportResult({ success: false, message: err.response?.data?.detail || 'Import failed' });
-      setTimeout(() => setImportResult(null), 3000);
-    } finally {
-      setImporting(false);
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      backup = JSON.parse(await file.text());
+    } catch {
+      showRestoreResult(false, 'Invalid JSON file');
+      return;
     }
+    if (!looksLikeBackup(backup)) {
+      showRestoreResult(false, "This file doesn't look like a Net Worth Tracker backup");
+      return;
+    }
+    setPendingRestore({ file, backup });
+  };
+
+  const handleRestored = (restored) => {
+    setPendingRestore(null);
+    const total = Object.entries(restored)
+      .filter(([key]) => key !== 'goal')
+      .reduce((sum, [, count]) => sum + count, 0);
+    setRestoreResult({ success: true, message: `Restored ${total} items` });
+    updateLastUpdated();
+    // Reload so every page picks up the restored data
+    setTimeout(() => window.location.reload(), 2000);
   };
 
   const navItems = [
@@ -161,7 +160,7 @@ export default function Layout() {
       {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-3xl">💰</span>
+          <img src="/logo.png" alt="NetWorth Tracker" className="w-8 h-8 rounded-lg" />
           <span className="font-bold text-xl text-gray-900 dark:text-white">NetWorth</span>
         </div>
         <div className="flex items-center gap-2">
@@ -198,9 +197,7 @@ export default function Layout() {
           <div className="p-6 border-b border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900 rounded-xl flex items-center justify-center">
-                  <span className="text-2xl">💰</span>
-                </div>
+                <img src="/logo.png" alt="NetWorth Tracker" className="w-10 h-10 rounded-xl" />
                 <div>
                   <h1 className="font-bold text-lg text-gray-900 dark:text-white">NetWorth</h1>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Tracker</p>
@@ -276,11 +273,11 @@ export default function Layout() {
 
             {/* Action Buttons */}
             <div className="space-y-2">
-              {/* Import Result Message */}
-              {importResult && (
-                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${importResult.success ? 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400'}`}>
-                  {importResult.success ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
-                  <span className="truncate">{importResult.message}</span>
+              {/* Restore Result Message */}
+              {restoreResult && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${restoreResult.success ? 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400'}`}>
+                  {restoreResult.success ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                  <span className="min-w-0 break-words">{restoreResult.message}</span>
                 </div>
               )}
               
@@ -306,12 +303,12 @@ export default function Layout() {
                 </button>
                 <button
                   onClick={handleRestoreClick}
-                  disabled={importing}
+                  disabled={pendingRestore !== null}
                   className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-xs font-medium bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-800 transition-colors duration-150 disabled:opacity-50"
                   title="Restore data from backup"
                 >
-                  <Upload className={`w-3.5 h-3.5 ${importing ? 'animate-spin' : ''}`} />
-                  <span>{importing ? 'Restoring...' : 'Restore'}</span>
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Restore</span>
                 </button>
               </div>
 
@@ -361,6 +358,15 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {pendingRestore && (
+        <RestoreDialog
+          file={pendingRestore.file}
+          backup={pendingRestore.backup}
+          onClose={() => setPendingRestore(null)}
+          onRestored={handleRestored}
+        />
+      )}
     </div>
   );
 }

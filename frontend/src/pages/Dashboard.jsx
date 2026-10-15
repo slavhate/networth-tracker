@@ -1,7 +1,15 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { dashboardAPI, goalAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
+import SnapshotDialog from '../components/SnapshotDialog';
+import { formatDate, formatMonthYear, todayIso } from '../utils/dates';
+import { categoryLabel } from '../utils/assetCategories';
+import { ASSET_CLASSES } from '../utils/assetClasses';
+import { snapshotFrequency } from '../utils/snapshotFrequencies';
+import { errorMessage } from '../utils/errors';
+import { formatCompactINR, amountInWords, formatShortINR } from '../utils/indianNumbers';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -13,7 +21,9 @@ import {
   Camera,
   Target,
   Edit2,
-  X
+  X,
+  CalendarClock,
+  Layers
 } from 'lucide-react';
 import {
   PieChart as RechartsPieChart,
@@ -28,7 +38,9 @@ import {
   Tooltip,
   Legend,
   BarChart,
-  Bar
+  Bar,
+  AreaChart,
+  Area
 } from 'recharts';
 
 const COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -42,20 +54,37 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
-const formatCategoryName = (name) => {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-};
+// The x-axis label of a snapshot on the history charts
+const snapshotDateLabel = (timestamp) =>
+  new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
 
 export default function Dashboard() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
   const [goal, setGoal] = useState(null);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [goalInput, setGoalInput] = useState('');
   const [goalSaving, setGoalSaving] = useState(false);
+  const [goalError, setGoalError] = useState('');
+  const [allocationView, setAllocationView] = useState(() => {
+    try {
+      return localStorage.getItem('allocationView') === 'holding' ? 'holding' : 'class';
+    } catch {
+      return 'class';
+    }
+  });
+
+  const changeAllocationView = (view) => {
+    setAllocationView(view);
+    try {
+      localStorage.setItem('allocationView', view);
+    } catch {
+      // storage unavailable (private mode, blocked) - the choice just won't persist
+    }
+  };
 
   const fetchDashboard = async () => {
     try {
@@ -79,38 +108,57 @@ export default function Dashboard() {
     fetchDashboard();
   }, []);
 
-  const handleSnapshot = async () => {
-    try {
-      setSnapshotLoading(true);
-      await dashboardAPI.createSnapshot();
-      await fetchDashboard();
-    } catch (err) {
-      setError('Failed to create snapshot');
-    } finally {
-      setSnapshotLoading(false);
-    }
+  const closeSnapshotDialog = () => setSnapshotDialogOpen(false);
+
+  const snapshotFrequencyChanged = (settings) => {
+    setMetrics((current) => ({
+      ...current,
+      snapshot_frequency: settings.frequency,
+      next_snapshot_on: settings.next_snapshot_on
+    }));
+  };
+
+  // A manual snapshot adds a history point and can move the next automatic date
+  const snapshotSaved = () => {
+    setSnapshotDialogOpen(false);
+    fetchDashboard();
   };
 
   const openGoalModal = () => {
-    setGoalInput(goal?.target_amount ? (goal.target_amount / 10000000).toString() : '10');
+    // In privacy mode the current target is not pre-filled, so opening the dialog doesn't reveal it
+    const target = goal?.target_amount;
+    setGoalInput(privacyMode ? '' : target > 0 ? String(target / 10000000) : '10');
+    setGoalError('');
     setGoalModalOpen(true);
   };
 
+  const closeGoalModal = () => {
+    setGoalModalOpen(false);
+    setGoalError('');
+  };
+
   const handleGoalSave = async () => {
+    const crores = parseFloat(goalInput);
+    if (!Number.isFinite(crores) || crores <= 0) {
+      setGoalError('Enter a target greater than 0');
+      return;
+    }
     try {
       setGoalSaving(true);
-      const targetAmount = parseFloat(goalInput) * 10000000; // Convert crores to rupees
+      setGoalError('');
+      const targetAmount = Math.round(crores * 10000000); // Convert crores to whole rupees
       const response = await goalAPI.update({ target_amount: targetAmount });
       setGoal(response.data);
       setGoalModalOpen(false);
     } catch (err) {
-      setError('Failed to update goal');
+      // Shown inside the dialog; the dashboard stays as it is
+      setGoalError(errorMessage(err, 'Failed to update goal'));
     } finally {
       setGoalSaving(false);
     }
   };
 
-  if (loading) {
+  if (loading && !metrics) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -118,15 +166,22 @@ export default function Dashboard() {
     );
   }
 
-  if (error) {
+  // Nothing loaded yet: show the error with a way to try again
+  if (error && !metrics) {
     return (
-      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-        {error}
+      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex flex-wrap items-center justify-between gap-3" role="alert">
+        <span>{error}</span>
+        <button onClick={fetchDashboard} className="btn-secondary flex items-center gap-2">
+          <RefreshCw className="w-4 h-4" />
+          Retry
+        </button>
       </div>
     );
   }
 
   const netWorthPositive = metrics?.net_worth >= 0;
+
+  const autoSnapshot = snapshotFrequency(metrics?.snapshot_frequency);
 
   // Format currency with privacy mode support
   const formatCurrency = (value) => {
@@ -134,23 +189,52 @@ export default function Dashboard() {
     return formatCurrencyRaw(value);
   };
 
+  // Value-axis tick in lakh/crore, e.g. ₹4.5 L or ₹1.2 Cr; hidden in privacy mode like every other amount
+  // Non-breaking space: Recharts wraps tick labels at spaces ("₹1.05 Cr" would split over two lines)
+  const formatAxisAmount = (value) => (privacyMode ? '••' : formatCompactINR(value).replace(' ', '\u00A0'));
+
+  // Card figures are short (₹1.25 Crore, formatShortINR); the full amount shows on hover, except in privacy mode
+  const fullAmountTitle = (value) => (privacyMode ? undefined : formatCurrencyRaw(value || 0));
+
+  // Latest snapshot from an earlier calendar month (history is newest first)
+  const thisMonth = todayIso().slice(0, 7);
+  const previousSnapshot = (metrics?.net_worth_history || []).find((s) => s.timestamp.slice(0, 7) < thisMonth);
+  const netWorthChange = previousSnapshot ? metrics.net_worth - previousSnapshot.net_worth : null;
+  const netWorthChangePercent = previousSnapshot && previousSnapshot.net_worth !== 0
+    ? (netWorthChange / Math.abs(previousSnapshot.net_worth)) * 100 : null;
+
   // Prepare chart data
-  const assetChartData = Object.entries(metrics?.assets_by_category || {}).map(([name, value]) => ({
-    name: formatCategoryName(name),
-    value
-  }));
+  const assetChartData = allocationView === 'class'
+    ? ASSET_CLASSES
+        .filter((c) => (metrics?.assets_by_class?.[c.key] || 0) > 0)
+        .map((c) => ({ name: c.label, value: metrics.assets_by_class[c.key], color: c.color }))
+    : Object.entries(metrics?.assets_by_category || {}).map(([name, value], index) => ({
+        name: categoryLabel(name),
+        value,
+        color: COLORS[index % COLORS.length]
+      }));
 
   const liabilityChartData = Object.entries(metrics?.liabilities_by_category || {}).map(([name, value]) => ({
-    name: formatCategoryName(name),
+    name: categoryLabel(name),
     value
   }));
 
   const historyData = [...(metrics?.net_worth_history || [])].reverse().map((snapshot) => ({
-    date: new Date(snapshot.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    date: snapshotDateLabel(snapshot.timestamp),
     netWorth: snapshot.net_worth,
     assets: snapshot.total_assets,
     liabilities: snapshot.total_liabilities
   }));
+
+  // Snapshots without a breakdown (older ones) are skipped; unknown class keys are ignored
+  const allocationHistory = [...(metrics?.net_worth_history || [])].reverse()
+    .filter((s) => s.assets_by_class)
+    .map((s) => ({
+      date: snapshotDateLabel(s.timestamp),
+      ...Object.fromEntries(ASSET_CLASSES.map((c) => [c.key, s.assets_by_class[c.key] || 0])),
+    }));
+  // Only classes that appear in at least one plotted snapshot get an area (and a legend entry)
+  const plottedClasses = ASSET_CLASSES.filter((c) => allocationHistory.some((point) => point[c.key] > 0));
 
   return (
     <div className="space-y-6">
@@ -160,45 +244,76 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Track your financial health</p>
         </div>
-        <div className="flex gap-3">
-          <button 
+        <div className="flex flex-wrap items-center gap-2">
+          <button
             onClick={fetchDashboard}
+            disabled={loading}
             className="btn-secondary flex items-center gap-2"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <button 
-            onClick={handleSnapshot}
-            disabled={snapshotLoading}
+          <button
+            onClick={() => setSnapshotDialogOpen(true)}
+            aria-haspopup="dialog"
             className="btn-primary flex items-center gap-2"
           >
             <Camera className="w-4 h-4" />
-            {snapshotLoading ? 'Saving...' : 'Save Snapshot'}
+            Save Snapshot
           </button>
         </div>
       </div>
+
+      {/* A failed refresh keeps the last loaded figures on screen */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between gap-3" role="alert">
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="p-1 hover:bg-red-100 rounded" aria-label="Dismiss">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {snapshotDialogOpen && (
+        <SnapshotDialog
+          frequency={autoSnapshot.value}
+          nextSnapshotOn={metrics?.next_snapshot_on}
+          lastSnapshotOn={metrics?.net_worth_history?.[0]?.timestamp.slice(0, 10)}
+          onClose={closeSnapshotDialog}
+          onFrequencyChanged={snapshotFrequencyChanged}
+          onSaved={snapshotSaved}
+        />
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* Net Worth */}
         <div className={`stat-card border-l-4 ${netWorthPositive ? 'border-l-green-500' : 'border-l-red-500'}`}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-medium text-gray-500">Net Worth</p>
-              <p className={`text-2xl font-bold mt-1 ${netWorthPositive ? 'text-green-600' : 'text-red-600'}`}>
-                <AnimatedNumber 
-                  value={metrics?.net_worth || 0} 
-                  formatter={formatCurrencyRaw}
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Net Worth</p>
+              <p className={`text-2xl font-bold mt-1 ${netWorthPositive ? 'text-green-600' : 'text-red-600'}`} title={fullAmountTitle(metrics?.net_worth)}>
+                <AnimatedNumber
+                  value={metrics?.net_worth || 0}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
+              {netWorthChange != null && (
+                <p
+                  className={`text-xs mt-1 ${netWorthChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                  title={fullAmountTitle(Math.abs(netWorthChange))}
+                >
+                  {netWorthChange >= 0 ? '▲' : '▼'} {privacyMode ? '₹ ••••••' : formatShortINR(Math.abs(netWorthChange))}
+                  {netWorthChangePercent != null && <> ({privacyMode ? '••' : `${Math.abs(netWorthChangePercent).toFixed(1)}%`})</>} since {formatMonthYear(previousSnapshot.timestamp.slice(0, 10))}
+                </p>
+              )}
             </div>
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${netWorthPositive ? 'bg-green-100' : 'bg-red-100'}`}>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${netWorthPositive ? 'bg-green-100 dark:bg-green-900/50' : 'bg-red-100 dark:bg-red-900/50'}`}>
               {netWorthPositive ? (
-                <TrendingUp className="w-6 h-6 text-green-600" />
+                <TrendingUp className="w-6 h-6 text-green-600 dark:text-green-400" />
               ) : (
-                <TrendingDown className="w-6 h-6 text-red-600" />
+                <TrendingDown className="w-6 h-6 text-red-600 dark:text-red-400" />
               )}
             </div>
           </div>
@@ -206,13 +321,13 @@ export default function Dashboard() {
 
         {/* Total Assets */}
         <div className="stat-card border-l-4 border-l-primary-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Assets</p>
-              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-                <AnimatedNumber 
-                  value={metrics?.total_assets || 0} 
-                  formatter={formatCurrencyRaw}
+              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white" title={fullAmountTitle(metrics?.total_assets)}>
+                <AnimatedNumber
+                  value={metrics?.total_assets || 0}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
@@ -226,13 +341,13 @@ export default function Dashboard() {
 
         {/* Total Liabilities */}
         <div className="stat-card border-l-4 border-l-orange-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Liabilities</p>
-              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-                <AnimatedNumber 
-                  value={metrics?.total_liabilities || 0} 
-                  formatter={formatCurrencyRaw}
+              <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white" title={fullAmountTitle(metrics?.total_liabilities)}>
+                <AnimatedNumber
+                  value={metrics?.total_liabilities || 0}
+                  formatter={formatShortINR}
                   privacyMask={privacyMode ? '₹ ••••••' : null}
                 />
               </p>
@@ -246,7 +361,7 @@ export default function Dashboard() {
 
         {/* Debt-to-Asset Ratio */}
         <div className="stat-card border-l-4 border-l-purple-500">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Debt-to-Asset Ratio</p>
               <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
@@ -268,12 +383,18 @@ export default function Dashboard() {
 
       {/* Net Worth Goal Card */}
       {(() => {
-        const goalTarget = goal?.target_amount || 100000000;
+        // A stored target of 0 (or none) means no goal is set; nothing is measured against a made-up target
+        const goalTarget = goal?.target_amount > 0 ? goal.target_amount : 0;
+        const hasTarget = goalTarget > 0;
         const currentNetWorth = Math.max(0, metrics?.net_worth || 0);
-        const progress = Math.min((currentNetWorth / goalTarget) * 100, 100);
+        const progress = hasTarget ? Math.min((currentNetWorth / goalTarget) * 100, 100) : 0;
         const remaining = Math.max(0, goalTarget - currentNetWorth);
-        const goalInCrores = (goalTarget / 10000000).toFixed(1);
-        
+        // "₹10 Crore", "₹50 Lakh"; a target under ₹1,000 has no words form and is shown in full
+        const goalInWords = amountInWords(goalTarget) || formatCurrencyRaw(goalTarget);
+        // Target x progress gives net worth, so privacy mode hides both (and everything derived from progress)
+        const showProgress = hasTarget && !privacyMode;
+        const shownProgress = showProgress ? progress : 0;
+
         // Milestones
         const milestones = [
           { percent: 25, label: '25%' },
@@ -303,9 +424,13 @@ export default function Dashboard() {
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <p className="text-white/80 text-sm">Target: ₹{goalInCrores} Crore</p>
+                  <p className="text-white/80 text-sm">
+                    Target: {!hasTarget ? 'not set' : privacyMode ? '₹ ••' : goalInWords}
+                  </p>
                   <p className="text-white/60 text-xs mt-0.5">
-                    {achievedMilestones > 0 ? `${achievedMilestones} milestone${achievedMilestones > 1 ? 's' : ''} achieved` : 'Start your journey'}
+                    {!hasTarget ? 'Set a target to track progress'
+                      : privacyMode ? 'Progress hidden'
+                      : achievedMilestones > 0 ? `${achievedMilestones} milestone${achievedMilestones > 1 ? 's' : ''} achieved` : 'Start your journey'}
                   </p>
                 </div>
               </div>
@@ -314,18 +439,20 @@ export default function Dashboard() {
               <div className="lg:col-span-6">
                 <div className="flex justify-between text-sm mb-2">
                   <span className="text-white/80">Progress</span>
-                  <span className="font-bold text-lg">{progress.toFixed(1)}%</span>
+                  <span className="font-bold text-lg">{showProgress ? `${progress.toFixed(1)}%` : '••'}</span>
                 </div>
                 {/* Progress bar with milestone markers */}
                 <div className="relative">
                   <div className="w-full bg-white/20 rounded-full h-5 overflow-hidden">
-                    <div 
+                    <div
                       className="h-full bg-gradient-to-r from-white/90 to-white rounded-full transition-all duration-500 ease-out relative"
-                      style={{ width: `${progress}%` }}
+                      style={{ width: `${shownProgress}%` }}
                     >
-                      {progress > 5 && (
-                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-purple-600 text-xs font-bold">
-                          {formatCurrency(currentNetWorth)}
+                      {/* Only once the fill is wide enough for the label; "Current" beside the bar shows it anyway */}
+                      {shownProgress >= 15 && (
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-purple-600 text-xs font-bold whitespace-nowrap">
+                          {/* Short form: the full amount doesn't fit inside a narrow bar */}
+                          {formatCompactINR(currentNetWorth)}
                         </span>
                       )}
                     </div>
@@ -338,7 +465,7 @@ export default function Dashboard() {
                         className="absolute top-0 h-full flex flex-col items-center"
                         style={{ left: `${m.percent}%`, transform: 'translateX(-50%)' }}
                       >
-                        <div className={`w-1 h-full ${progress >= m.percent ? 'bg-white/60' : 'bg-white/30'}`} />
+                        <div className={`w-1 h-full ${shownProgress >= m.percent ? 'bg-white/60' : 'bg-white/30'}`} />
                       </div>
                     ))}
                   </div>
@@ -348,7 +475,7 @@ export default function Dashboard() {
                   {milestones.map((m) => (
                     <span 
                       key={m.percent}
-                      className={`absolute text-xs transform -translate-x-1/2 ${progress >= m.percent ? 'text-white font-medium' : 'text-white/50'}`}
+                      className={`absolute text-xs transform -translate-x-1/2 ${shownProgress >= m.percent ? 'text-white font-medium' : 'text-white/50'}`}
                       style={{ left: `${m.percent}%` }}
                     >
                       {m.label}
@@ -362,19 +489,23 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Current</p>
-                    <p className="font-bold text-sm mt-0.5">{formatCurrency(currentNetWorth)}</p>
+                    <p className="font-bold text-sm mt-0.5" title={fullAmountTitle(currentNetWorth)}>
+                      {privacyMode ? '₹ ••••••' : formatShortINR(currentNetWorth)}
+                    </p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-3 text-center">
                     <p className="text-white/70 text-xs uppercase tracking-wide">Remaining</p>
-                    <p className="font-bold text-sm mt-0.5">{formatCurrency(remaining)}</p>
+                    <p className="font-bold text-sm mt-0.5" title={hasTarget ? fullAmountTitle(remaining) : undefined}>
+                      {!hasTarget ? '—' : privacyMode ? '₹ ••••••' : formatShortINR(remaining)}
+                    </p>
                   </div>
                 </div>
-                {progress < 100 && (
+                {showProgress && progress < 100 && (
                   <p className="text-white/60 text-xs text-center mt-2">
-                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> ({formatCurrency(goalTarget * nextMilestone.percent / 100)})
+                    Next milestone: <span className="text-white font-medium">{nextMilestone.label}</span> (<span title={fullAmountTitle(goalTarget * nextMilestone.percent / 100)}>{formatShortINR(goalTarget * nextMilestone.percent / 100)}</span>)
                   </p>
                 )}
-                {progress >= 100 && (
+                {showProgress && progress >= 100 && (
                   <p className="text-white text-xs text-center mt-2 font-medium">
                     Goal Achieved! Set a new target.
                   </p>
@@ -385,13 +516,13 @@ export default function Dashboard() {
         );
       })()}
 
-      {/* Goal Edit Modal */}
-      {goalModalOpen && (
+      {/* Goal Edit Modal, on <body> so the space-y margin can't shift the fixed overlay */}
+      {goalModalOpen && createPortal(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-sm">
             <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Set Net Worth Goal</h2>
-              <button onClick={() => setGoalModalOpen(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
+              <button onClick={closeGoalModal} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -408,11 +539,18 @@ export default function Dashboard() {
                   onChange={(e) => setGoalInput(e.target.value)}
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  = {formatCurrency(parseFloat(goalInput || 0) * 10000000)}
+                  = {formatCurrency(Math.round(parseFloat(goalInput || 0) * 10000000) || 0)}
+                  {!privacyMode && amountInWords(Math.round(parseFloat(goalInput) * 10000000))
+                    && ` (${amountInWords(Math.round(parseFloat(goalInput) * 10000000))})`}
                 </p>
               </div>
+              {goalError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm" role="alert">
+                  {goalError}
+                </div>
+              )}
               <div className="flex gap-3 pt-4">
-                <button onClick={() => setGoalModalOpen(false)} className="btn-secondary flex-1">
+                <button onClick={closeGoalModal} className="btn-secondary flex-1">
                   Cancel
                 </button>
                 <button onClick={handleGoalSave} disabled={goalSaving || !goalInput} className="btn-primary flex-1">
@@ -421,6 +559,36 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Deposits maturing */}
+      {metrics?.maturities?.length > 0 && (
+        <div className="card border-l-4 border-l-amber-500">
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarClock className="w-5 h-5 text-amber-600" />
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Deposits maturing</h2>
+          </div>
+          <ul className="space-y-2">
+            {metrics.maturities.map((m) => {
+              const label = `${m.bank_name} ${m.account_type.toUpperCase()}`;
+              return (
+                <li key={m.id} className="text-sm">
+                  {m.days_to_maturity <= 0 ? (
+                    <span className="text-red-600 dark:text-red-400 font-medium">
+                      {label} matured on {formatDate(m.maturity_date)} — update or renew it
+                    </span>
+                  ) : (
+                    <span className="text-gray-700 dark:text-gray-300">
+                      {label} matures in {m.days_to_maturity} day{m.days_to_maturity === 1 ? '' : 's'}
+                      {m.maturity_value != null && <> ({formatCurrency(m.maturity_value)})</>}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -428,9 +596,31 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Asset Allocation */}
         <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <PieChart className="w-5 h-5 text-primary-600" />
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Asset Allocation</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div className="flex items-center gap-2">
+              <PieChart className="w-5 h-5 text-primary-600" />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Asset Allocation</h2>
+            </div>
+            <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-600 p-0.5">
+              {[
+                { view: 'class', label: 'By asset class' },
+                { view: 'holding', label: 'By holding' }
+              ].map(({ view, label }) => (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => changeAllocationView(view)}
+                  aria-pressed={allocationView === view}
+                  className={`text-xs px-2.5 py-1 rounded-md ${
+                    allocationView === view
+                      ? 'bg-primary-600 text-white'
+                      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           {assetChartData.length > 0 ? (
             <div className="h-64">
@@ -448,7 +638,7 @@ export default function Dashboard() {
                     labelLine={false}
                   >
                     {assetChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(value) => formatCurrency(value)} />
@@ -473,7 +663,7 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={liabilityChartData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
-                  <XAxis type="number" tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`} />
+                  <XAxis type="number" tickFormatter={formatAxisAmount} />
                   <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 12 }} />
                   <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Bar dataKey="value" fill="#f97316" radius={[0, 4, 4, 0]} />
@@ -500,10 +690,10 @@ export default function Dashboard() {
               <LineChart data={historyData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`} />
+                <YAxis tickFormatter={formatAxisAmount} width={72} />
                 <Tooltip formatter={(value) => formatCurrency(value)} />
                 <Legend />
-                <Line 
+                <Line
                   type="monotone" 
                   dataKey="assets" 
                   stroke="#0ea5e9" 
@@ -534,8 +724,45 @@ export default function Dashboard() {
           <div className="h-72 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <p>No history yet.</p>
-              <p className="text-sm mt-1">Click "Save Snapshot" to start tracking your progress over time.</p>
+              <p className="text-sm mt-1">A snapshot is saved automatically {autoSnapshot.phrase} when you open the dashboard; use Save Snapshot to add one now or change how often.</p>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Allocation History */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Layers className="w-5 h-5 text-primary-600" />
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Allocation History</h2>
+        </div>
+        {allocationHistory.length >= 2 ? (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={allocationHistory}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={formatAxisAmount} width={72} />
+                <Tooltip formatter={(value) => formatCurrency(value)} />
+                <Legend />
+                {plottedClasses.map((c) => (
+                  <Area
+                    key={c.key}
+                    type="monotone"
+                    dataKey={c.key}
+                    name={c.label}
+                    stackId="1"
+                    stroke={c.color}
+                    fill={c.color}
+                    fillOpacity={0.6}
+                  />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="h-72 flex items-center justify-center text-gray-400">
+            <p className="text-center">Allocation history appears once two snapshots have a breakdown.</p>
           </div>
         )}
       </div>

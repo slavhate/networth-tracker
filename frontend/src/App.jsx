@@ -13,10 +13,27 @@ import MutualFunds from './pages/MutualFunds';
 import Equities from './pages/Equities';
 import Security from './pages/Security';
 import Layout from './components/Layout';
+import Notices from './components/Notices';
+
+// The saved session could not be checked (server unreachable or failing); the token is kept for a retry
+function SessionError() {
+  const { retrySession, logout } = useAuth();
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="max-w-sm w-full bg-red-50 border border-red-200 text-red-700 px-4 py-4 rounded-lg text-center space-y-3" role="alert">
+        <p>Could not reach the server to restore your session.</p>
+        <div className="flex gap-2 justify-center">
+          <button onClick={retrySession} className="btn-primary">Retry</button>
+          <button onClick={logout} className="btn-secondary">Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PrivateRoute({ children }) {
-  const { user, loading } = useAuth();
-  
+  const { user, loading, sessionError } = useAuth();
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -24,13 +41,15 @@ function PrivateRoute({ children }) {
       </div>
     );
   }
-  
+
+  if (!user && sessionError) return <SessionError />;
+
   return user ? children : <Navigate to="/login" />;
 }
 
 function PublicRoute({ children }) {
-  const { user, loading } = useAuth();
-  
+  const { user, loading, sessionError } = useAuth();
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -38,7 +57,9 @@ function PublicRoute({ children }) {
       </div>
     );
   }
-  
+
+  if (!user && sessionError) return <SessionError />;
+
   return user ? <Navigate to="/" /> : children;
 }
 
@@ -75,6 +96,7 @@ function App() {
             </Route>
           </Routes>
           </BrowserRouter>
+          <Notices />
         </AuthProvider>
       </PrivacyProvider>
     </ThemeProvider>

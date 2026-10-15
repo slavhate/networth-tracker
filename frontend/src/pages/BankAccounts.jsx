@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { bankAccountsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import { formatShortINR } from '../utils/indianNumbers';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
+import ItemTile, { ItemTileGrid } from '../components/ItemTile';
+import {
+  Plus,
+  X,
   Building2,
   Landmark,
   PiggyBank,
@@ -14,6 +16,8 @@ import {
   Clock,
   CalendarClock
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
+import { formatDate } from '../utils/dates';
 
 const ACCOUNT_TYPES = [
   { value: 'savings', label: 'Savings Account', icon: PiggyBank, color: 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400' },
@@ -22,6 +26,15 @@ const ACCOUNT_TYPES = [
   { value: 'fd', label: 'Fixed Deposit', icon: Clock, color: 'bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400' },
   { value: 'rd', label: 'Recurring Deposit', icon: CalendarClock, color: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400' },
 ];
+
+const DEPOSIT_TYPES = ['fd', 'rd'];
+
+const emptyForm = () => ({
+  bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '',
+  interest_rate: '', start_date: '', maturity_date: '', monthly_deposit: '',
+});
+
+const balanceLabel = (type) => (type === 'fd' ? 'Principal (₹)' : type === 'rd' ? 'Deposited so far (₹)' : 'Balance (₹)');
 
 const getAccountTypeInfo = (value) => ACCOUNT_TYPES.find(t => t.value === value) || ACCOUNT_TYPES[0];
 
@@ -34,8 +47,10 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
+// Show only the last 4 digits; a number of 4 characters or fewer would be shown whole, so it is masked fully
 const maskAccountNumber = (num) => {
-  if (!num || num.length < 4) return num;
+  if (!num) return num;
+  if (num.length <= 4) return '••••';
   return '••••' + num.slice(-4);
 };
 
@@ -45,15 +60,10 @@ export default function BankAccounts() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
-  const [formData, setFormData] = useState({
-    bank_name: '',
-    account_number: '',
-    account_type: 'savings',
-    balance: '',
-    branch: '',
-    ifsc_code: ''
-  });
+  const [formData, setFormData] = useState(emptyForm);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
   const fetchAccounts = async () => {
@@ -61,9 +71,11 @@ export default function BankAccounts() {
       setLoading(true);
       const response = await bankAccountsAPI.getAll();
       setAccounts(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load bank accounts');
+      setPageError({ message: errorMessage(err, 'Failed to load bank accounts'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -82,11 +94,15 @@ export default function BankAccounts() {
         account_type: account.account_type,
         balance: account.balance.toString(),
         branch: account.branch || '',
-        ifsc_code: account.ifsc_code || ''
+        ifsc_code: account.ifsc_code || '',
+        interest_rate: account.interest_rate?.toString() ?? '',
+        start_date: account.start_date || '',
+        maturity_date: account.maturity_date || '',
+        monthly_deposit: account.monthly_deposit?.toString() ?? ''
       });
     } else {
       setEditingAccount(null);
-      setFormData({ bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '' });
+      setFormData(emptyForm());
     }
     setError('');
     setModalOpen(true);
@@ -95,7 +111,7 @@ export default function BankAccounts() {
   const closeModal = () => {
     setModalOpen(false);
     setEditingAccount(null);
-    setFormData({ bank_name: '', account_number: '', account_type: 'savings', balance: '', branch: '', ifsc_code: '' });
+    setFormData(emptyForm());
   };
 
   const handleSubmit = async (e) => {
@@ -104,13 +120,19 @@ export default function BankAccounts() {
     setSubmitting(true);
 
     try {
+      const isDeposit = DEPOSIT_TYPES.includes(formData.account_type);
+      const optionalNumber = (v) => (v === '' ? null : parseFloat(v));
       const data = {
         bank_name: formData.bank_name,
         account_number: formData.account_number,
         account_type: formData.account_type,
         balance: parseFloat(formData.balance),
         branch: formData.branch || null,
-        ifsc_code: formData.ifsc_code || null
+        ifsc_code: formData.ifsc_code || null,
+        interest_rate: isDeposit ? optionalNumber(formData.interest_rate) : null,
+        start_date: isDeposit ? formData.start_date || null : null,
+        maturity_date: isDeposit ? formData.maturity_date || null : null,
+        monthly_deposit: formData.account_type === 'rd' ? optionalNumber(formData.monthly_deposit) : null
       };
 
       if (editingAccount) {
@@ -122,7 +144,7 @@ export default function BankAccounts() {
       closeModal();
       fetchAccounts();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save bank account');
+      setError(errorMessage(err, 'Failed to save bank account'));
     } finally {
       setSubmitting(false);
     }
@@ -135,7 +157,7 @@ export default function BankAccounts() {
       await bankAccountsAPI.delete(id);
       fetchAccounts();
     } catch (err) {
-      setError('Failed to delete bank account');
+      setPageError({ message: errorMessage(err, 'Failed to delete bank account'), retry: false });
     }
   };
 
@@ -144,7 +166,7 @@ export default function BankAccounts() {
     return formatCurrencyRaw(value);
   };
 
-  const totalBalance = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const totalBalance = accounts.reduce((sum, account) => sum + account.current_value, 0);
 
   if (loading) {
     return (
@@ -168,6 +190,12 @@ export default function BankAccounts() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchAccounts : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Card */}
       <div className="card bg-gradient-to-r from-blue-500 to-blue-600 text-white">
         <div className="flex items-center justify-between">
@@ -176,11 +204,12 @@ export default function BankAccounts() {
             <p className="text-3xl font-bold mt-1">
               <AnimatedNumber 
                 value={totalBalance} 
-                formatter={formatCurrencyRaw}
-                privacyMask={privacyMode ? '₹ ••••••' : null}
+                formatter={formatShortINR}
+                privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                title={loaded && !privacyMode ? formatCurrencyRaw(totalBalance) : undefined}
               />
             </p>
-            <p className="text-blue-100 text-sm mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
+            {loaded && <p className="text-blue-100 text-sm mt-1">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>}
           </div>
           <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
             <Landmark className="w-8 h-8" />
@@ -189,7 +218,7 @@ export default function BankAccounts() {
       </div>
 
       {/* Accounts List */}
-      {accounts.length === 0 ? (
+      {accounts.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <Landmark className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white">No bank accounts yet</h3>
@@ -200,53 +229,62 @@ export default function BankAccounts() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {accounts.map((account) => {
             const typeInfo = getAccountTypeInfo(account.account_type);
-            const TypeIcon = typeInfo.icon;
-            
+            const isDeposit = DEPOSIT_TYPES.includes(account.account_type);
+
             return (
-              <div key={account.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${typeInfo.color}`}>
-                    <TypeIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{account.bank_name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                      <span>{typeInfo.label}</span>
-                      <span>•</span>
-                      <span>{maskAccountNumber(account.account_number)}</span>
-                    </div>
-                    {account.branch && (
-                      <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">{account.branch}</p>
+              <ItemTile
+                key={account.id}
+                icon={typeInfo.icon}
+                iconColor={typeInfo.color}
+                title={account.bank_name}
+                subtitle={`${typeInfo.label} • ${maskAccountNumber(account.account_number)}`}
+                badges={(isDeposit && account.interest_rate != null) || account.matured ? (
+                  <>
+                    {isDeposit && account.interest_rate != null && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                        {account.interest_rate}% p.a.
+                      </span>
                     )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(account.balance)}</p>
-                    {account.ifsc_code && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500">IFSC: {account.ifsc_code}</p>
+                    {account.matured && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                        Matured
+                      </span>
                     )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => openModal(account)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(account.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+                  </>
+                ) : null}
+                itemLabel={account.bank_name}
+                onEdit={() => openModal(account)}
+                onDelete={() => handleDelete(account.id)}
+                amountLabel={isDeposit ? 'Current value' : 'Balance'}
+                amount={formatCurrency(account.current_value)}
+                amountValue={account.current_value}
+                privacyMode={privacyMode}
+              >
+                {account.branch && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 truncate" title={account.branch}>{account.branch}</p>
+                )}
+                {account.ifsc_code && (
+                  <p className="text-gray-400 dark:text-gray-500">IFSC: {account.ifsc_code}</p>
+                )}
+                {account.days_to_maturity != null && (
+                  account.matured ? (
+                    <p className="font-medium text-red-600 dark:text-red-400">
+                      Matured on {formatDate(account.maturity_date)} — update or renew it
+                    </p>
+                  ) : (
+                    <p>
+                      Matures in {account.days_to_maturity} day{account.days_to_maturity === 1 ? '' : 's'} ({formatDate(account.maturity_date)})
+                      {account.maturity_value != null && <> · {formatCurrency(account.maturity_value)}</>}
+                    </p>
+                  )
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}
@@ -309,18 +347,54 @@ export default function BankAccounts() {
               </div>
 
               <div>
-                <label className="label">Balance (₹)</label>
+                <label className="label">{balanceLabel(formData.account_type)}</label>
                 <input
                   type="number"
                   className="input"
                   placeholder="0.00"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={formData.balance}
                   onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
                   required
                 />
+                <AmountHint value={formData.balance} />
               </div>
+
+              {DEPOSIT_TYPES.includes(formData.account_type) && (
+                <>
+                  {formData.account_type === 'rd' && (
+                    <div>
+                      <label className="label">Monthly deposit (₹)</label>
+                      <input type="number" className="input" placeholder="e.g., 5000" min="0.01" step="any"
+                        value={formData.monthly_deposit}
+                        onChange={(e) => setFormData({ ...formData, monthly_deposit: e.target.value })} />
+                      <AmountHint value={formData.monthly_deposit} />
+                    </div>
+                  )}
+                  <div>
+                    <label className="label">Interest rate (% p.a.)</label>
+                    <input type="number" className="input" placeholder="e.g., 7.1" min="0" max="100" step="any"
+                      value={formData.interest_rate}
+                      onChange={(e) => setFormData({ ...formData, interest_rate: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="label">Start date</label>
+                      <input type="date" className="input" value={formData.start_date}
+                        onChange={(e) => setFormData({ ...formData, start_date: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="label">Maturity date</label>
+                      <input type="date" className="input" value={formData.maturity_date} min={formData.start_date || undefined}
+                        onChange={(e) => setFormData({ ...formData, maturity_date: e.target.value })} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                    Interest compounds quarterly, as banks quote FD and RD rates.
+                  </p>
+                </>
+              )}
 
               <div>
                 <label className="label">Branch (Optional)</label>

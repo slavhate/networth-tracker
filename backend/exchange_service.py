@@ -13,19 +13,29 @@ _cache_timestamp: float = 0
 # Fallback rate if all APIs fail
 FALLBACK_RATE = 83.5
 
+# Whether the last rate fetch_usd_to_inr returned was live (or a fresh cache) rather than a stale one or the fallback
+_last_live: bool = True
+
+
+def last_rate_was_live() -> bool:
+    """Whether the rate fetch_usd_to_inr last returned came from a live source (or a fresh cache). False means a
+    stale cached rate or the hardcoded fallback was used."""
+    return _last_live
+
 
 async def fetch_usd_to_inr() -> float:
     """
     Fetch current USD to INR exchange rate from free APIs.
     Uses caching to avoid excessive API calls.
-    Falls back to hardcoded rate if all sources fail.
+    Falls back to hardcoded rate if all sources fail (see last_rate_was_live).
     """
-    global _cached_rate, _cache_timestamp
+    global _cached_rate, _cache_timestamp, _last_live
     
     current_time = time.time()
     
     # Return cached rate if still valid
     if _cached_rate is not None and (current_time - _cache_timestamp) < CACHE_DURATION:
+        _last_live = True
         return _cached_rate
     
     # Try multiple free APIs
@@ -38,9 +48,11 @@ async def fetch_usd_to_inr() -> float:
     if rate is not None:
         _cached_rate = rate
         _cache_timestamp = current_time
+        _last_live = True
         return rate
     
     # Return cached rate if available (even if expired), otherwise fallback
+    _last_live = False
     if _cached_rate is not None:
         return _cached_rate
     

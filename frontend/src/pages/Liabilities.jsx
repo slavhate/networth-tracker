@@ -2,19 +2,26 @@ import { useState, useEffect } from 'react';
 import { liabilitiesAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
+import { formatShortINR } from '../utils/indianNumbers';
+import PageError from '../components/PageError';
+import AmountHint from '../components/AmountHint';
+import LoanScheduleModal from '../components/LoanScheduleModal';
+import ItemTile, { ItemTileGrid, TileAction } from '../components/ItemTile';
+import {
+  Plus,
+  X,
   CreditCard,
   Home,
   Car,
   GraduationCap,
   Wallet,
   HelpCircle,
-  Percent
+  Percent,
+  CalendarDays
 } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
+import { todayIso, formatDate, formatMonthYear } from '../utils/dates';
+import { emiForTenure } from '../utils/loans';
 
 const CATEGORIES = [
   { value: 'mortgage', label: 'Mortgage', icon: Home, color: 'bg-purple-100 text-purple-600' },
@@ -36,20 +43,29 @@ const formatCurrencyRaw = (value) => {
   }).format(value);
 };
 
+const emptyForm = () => ({
+  name: '', amount: '', category: 'credit_card', interest_rate: '', description: '',
+  emi: '', balance_date: todayIso(), tenure_months: '',
+});
+
 export default function Liabilities() {
   const { privacyMode, updateLastUpdated } = usePrivacy();
   const [liabilities, setLiabilities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingLiability, setEditingLiability] = useState(null);
-  const [formData, setFormData] = useState({
-    name: '',
-    amount: '',
-    category: 'credit_card',
-    interest_rate: '',
-    description: ''
-  });
+  const [formData, setFormData] = useState(emptyForm);
+  // Editing a loan with an EMI: the balance fields start as the saved balance and date. The first rate, EMI or tenure
+  // change moves them to the last EMI date and the outstanding then ('moved'), so the change isn't applied back to the
+  // old date and a tenure counts the months left from there. Once the user sets the balance or its date themselves
+  // ('typed'), theirs stands.
+  const [anchorState, setAnchorState] = useState('stored');
+  // The EMI came from a tenure the user typed, so it follows later balance and rate changes.
+  const [tenureDriven, setTenureDriven] = useState(false);
+  const [scheduleFor, setScheduleFor] = useState(null);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState(null);   // a list load or delete failure, shown on the page
+  const [loaded, setLoaded] = useState(false);       // the list has loaded at least once
   const [submitting, setSubmitting] = useState(false);
 
   const fetchLiabilities = async () => {
@@ -57,9 +73,11 @@ export default function Liabilities() {
       setLoading(true);
       const response = await liabilitiesAPI.getAll();
       setLiabilities(response.data);
+      setLoaded(true);
+      setPageError(null);
       updateLastUpdated();
     } catch (err) {
-      setError('Failed to load liabilities');
+      setPageError({ message: errorMessage(err, 'Failed to load liabilities'), retry: true });
     } finally {
       setLoading(false);
     }
@@ -77,12 +95,17 @@ export default function Liabilities() {
         amount: liability.amount.toString(),
         category: liability.category,
         interest_rate: liability.interest_rate?.toString() || '',
-        description: liability.description || ''
+        description: liability.description || '',
+        emi: liability.emi?.toString() ?? '',
+        balance_date: liability.balance_date || todayIso(),
+        tenure_months: liability.tenure_months?.toString() ?? ''
       });
     } else {
       setEditingLiability(null);
-      setFormData({ name: '', amount: '', category: 'credit_card', interest_rate: '', description: '' });
+      setFormData(emptyForm());
     }
+    setAnchorState('stored');
+    setTenureDriven(false);
     setError('');
     setModalOpen(true);
   };
@@ -90,7 +113,7 @@ export default function Liabilities() {
   const closeModal = () => {
     setModalOpen(false);
     setEditingLiability(null);
-    setFormData({ name: '', amount: '', category: 'credit_card', interest_rate: '', description: '' });
+    setFormData(emptyForm());
   };
 
   const handleSubmit = async (e) => {
@@ -104,7 +127,10 @@ export default function Liabilities() {
         amount: parseFloat(formData.amount),
         category: formData.category,
         interest_rate: formData.interest_rate ? parseFloat(formData.interest_rate) : null,
-        description: formData.description || null
+        description: formData.description || null,
+        emi: formData.emi === '' ? null : parseFloat(formData.emi),
+        balance_date: formData.balance_date || null,
+        tenure_months: formData.tenure_months === '' ? null : parseInt(formData.tenure_months, 10)
       };
 
       if (editingLiability) {
@@ -116,7 +142,7 @@ export default function Liabilities() {
       closeModal();
       fetchLiabilities();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save liability');
+      setError(errorMessage(err, 'Failed to save liability'));
     } finally {
       setSubmitting(false);
     }
@@ -129,7 +155,7 @@ export default function Liabilities() {
       await liabilitiesAPI.delete(id);
       fetchLiabilities();
     } catch (err) {
-      setError('Failed to delete liability');
+      setPageError({ message: errorMessage(err, 'Failed to delete liability'), retry: false });
     }
   };
 
@@ -138,7 +164,23 @@ export default function Liabilities() {
     return formatCurrencyRaw(value);
   };
 
-  const totalLiabilities = liabilities.reduce((sum, liability) => sum + liability.amount, 0);
+  // Fill the EMI from a tenure, using the balance and rate already entered.
+  const fillEmiFromTenure = (form) => {
+    const principal = parseFloat(form.amount);
+    const months = parseInt(form.tenure_months, 10);
+    if (!(principal > 0) || !(months > 0)) return form;
+    const emi = emiForTenure(principal, parseFloat(form.interest_rate) || 0, months);
+    return Number.isFinite(emi) ? { ...form, emi: emi.toString() } : form;
+  };
+
+  // On the first rate, EMI or tenure change to a loan with an EMI, start from the last EMI date at the balance outstanding then.
+  const reanchor = (form) => {
+    if (anchorState !== 'stored' || !editingLiability?.amortized || !editingLiability.last_emi_date) return form;
+    setAnchorState('moved');
+    return { ...form, amount: editingLiability.outstanding.toString(), balance_date: editingLiability.last_emi_date };
+  };
+
+  const totalLiabilities = liabilities.reduce((sum, liability) => sum + liability.outstanding, 0);
   const avgInterestRate = liabilities.length > 0
     ? liabilities.reduce((sum, l) => sum + (l.interest_rate || 0), 0) / liabilities.filter(l => l.interest_rate).length
     : 0;
@@ -165,6 +207,12 @@ export default function Liabilities() {
         </button>
       </div>
 
+      <PageError
+        message={pageError?.message}
+        onRetry={pageError?.retry ? fetchLiabilities : undefined}
+        onDismiss={() => setPageError(null)}
+      />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="card bg-gradient-to-r from-orange-500 to-red-500 text-white">
@@ -174,8 +222,9 @@ export default function Liabilities() {
               <p className="text-3xl font-bold mt-1">
                 <AnimatedNumber 
                   value={totalLiabilities} 
-                  formatter={formatCurrencyRaw}
-                  privacyMask={privacyMode ? '₹ ••••••' : null}
+                  formatter={formatShortINR}
+                  privacyMask={!loaded ? '—' : privacyMode ? '₹ ••••••' : null}
+                  title={loaded && !privacyMode ? formatCurrencyRaw(totalLiabilities) : undefined}
                 />
               </p>
             </div>
@@ -193,6 +242,7 @@ export default function Liabilities() {
                 <AnimatedNumber 
                   value={avgInterestRate || 0} 
                   formatter={(v) => v ? `${v.toFixed(1)}%` : 'N/A'}
+                  privacyMask={loaded ? null : '—'}
                 />
               </p>
             </div>
@@ -204,7 +254,7 @@ export default function Liabilities() {
       </div>
 
       {/* Liabilities List */}
-      {liabilities.length === 0 ? (
+      {liabilities.length === 0 ? loaded && (
         <div className="card text-center py-12">
           <CreditCard className="w-16 h-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-medium text-gray-900">No liabilities yet</h3>
@@ -215,53 +265,68 @@ export default function Liabilities() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <ItemTileGrid>
           {liabilities.map((liability) => {
             const categoryInfo = getCategoryInfo(liability.category);
-            const CategoryIcon = categoryInfo.icon;
-            
+
             return (
-              <div key={liability.id} className="card hover:shadow-md transition-shadow">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${categoryInfo.color}`}>
-                    <CategoryIcon className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{liability.name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-gray-500">
-                      <span>{categoryInfo.label}</span>
-                      {liability.interest_rate && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                          {liability.interest_rate}% APR
-                        </span>
-                      )}
+              <ItemTile
+                key={liability.id}
+                icon={categoryInfo.icon}
+                iconColor={categoryInfo.color}
+                title={liability.name}
+                subtitle={categoryInfo.label}
+                badges={liability.interest_rate != null && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                    {liability.interest_rate}% APR
+                  </span>
+                )}
+                itemLabel={liability.name}
+                actions={liability.amortized && !liability.emi_too_low && (
+                  <TileAction label="Repayment schedule" onClick={() => setScheduleFor(liability)}>
+                    <CalendarDays className="w-4 h-4" />
+                  </TileAction>
+                )}
+                onEdit={() => openModal(liability)}
+                onDelete={() => handleDelete(liability.id)}
+                amountLabel="Outstanding"
+                amount={formatCurrency(liability.outstanding)}
+                amountValue={liability.outstanding}
+                amountClassName="text-red-600 dark:text-red-400"
+                privacyMode={privacyMode}
+              >
+                {liability.amortized && (
+                  liability.emi_too_low ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>EMI {formatCurrency(liability.emi)}</span>
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                        EMI doesn't cover the interest
+                      </span>
                     </div>
-                    {liability.description && (
-                      <p className="text-sm text-gray-400 truncate mt-1">{liability.description}</p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-bold text-red-600">{formatCurrency(liability.amount)}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => openModal(liability)}
-                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(liability.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 text-gray-500 hover:text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+                  ) : (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-700 dark:text-gray-200">EMI {formatCurrency(liability.emi)}</span>
+                        {liability.payoff_date && <> · paid off by {formatMonthYear(liability.payoff_date)}</>}
+                      </p>
+                      {liability.payoff_date && (
+                        <p>{formatCurrency(liability.interest_remaining)} interest left</p>
+                      )}
+                      {liability.next_emi_interest != null && liability.next_emi_principal != null && (
+                        <p>
+                          Next EMI: {formatCurrency(liability.next_emi_interest)} interest + {formatCurrency(liability.next_emi_principal)} principal
+                        </p>
+                      )}
+                    </>
+                  )
+                )}
+                {liability.description && (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 line-clamp-2" title={liability.description}>{liability.description}</p>
+                )}
+              </ItemTile>
             );
           })}
-        </div>
+        </ItemTileGrid>
       )}
 
       {/* Modal */}
@@ -297,18 +362,41 @@ export default function Liabilities() {
               </div>
 
               <div>
-                <label className="label">Amount Owed (₹)</label>
+                <label className="label">Balance (₹)</label>
                 <input
                   type="number"
                   className="input"
                   placeholder="0.00"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  onChange={(e) => {
+                    const next = { ...formData, amount: e.target.value, balance_date: todayIso() };
+                    setAnchorState('typed');
+                    setFormData(tenureDriven ? fillEmiFromTenure(next) : next);
+                  }}
                   required
                 />
+                <AmountHint value={formData.amount} />
               </div>
+
+              <div>
+                <label className="label">Balance as of</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={formData.balance_date}
+                  onChange={(e) => {
+                    setAnchorState('typed');
+                    setFormData({ ...formData, balance_date: e.target.value });
+                  }}
+                />
+              </div>
+              {anchorState === 'moved' && (
+                <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                  Rate, EMI and tenure changes apply from {formatDate(editingLiability.last_emi_date)}: the balance there is the outstanding on that date.
+                </p>
+              )}
 
               <div>
                 <label className="label">Category</label>
@@ -333,11 +421,56 @@ export default function Liabilities() {
                   placeholder="e.g., 18.99"
                   min="0"
                   max="100"
-                  step="0.01"
+                  step="any"
                   value={formData.interest_rate}
-                  onChange={(e) => setFormData({ ...formData, interest_rate: e.target.value })}
+                  onChange={(e) => {
+                    const next = reanchor({ ...formData, interest_rate: e.target.value });
+                    setFormData(tenureDriven ? fillEmiFromTenure(next) : next);
+                  }}
                 />
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">EMI ₹/month (Optional)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    placeholder="e.g., 52000"
+                    min="0.01"
+                    step="any"
+                    value={formData.emi}
+                    onChange={(e) => {
+                      setTenureDriven(false);
+                      setFormData(reanchor({ ...formData, emi: e.target.value, tenure_months: '' }));
+                    }}
+                  />
+                  <AmountHint value={formData.emi} />
+                </div>
+                <div>
+                  <label className="label">…or tenure (months)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    placeholder="e.g., 240"
+                    min="1"
+                    max="600"
+                    step="1"
+                    value={formData.tenure_months}
+                    onChange={(e) => {
+                      const tenure_months = e.target.value;
+                      setTenureDriven(true);
+                      // Re-anchor first, so the EMI comes from the outstanding over the months left from the last EMI date.
+                      const next = reanchor({ ...formData, tenure_months });
+                      // The tenure filled the EMI, so emptying the tenure empties it again.
+                      setFormData(tenure_months === '' ? { ...next, emi: '' } : fillEmiFromTenure(next));
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 dark:text-gray-500 !mt-1">
+                With an EMI, the balance goes down every month from the date above. Enter a tenure to work out the EMI.
+              </p>
 
               <div>
                 <label className="label">Description (Optional)</label>
@@ -360,6 +493,14 @@ export default function Liabilities() {
             </form>
           </div>
         </div>
+      )}
+
+      {scheduleFor && (
+        <LoanScheduleModal
+          liability={scheduleFor}
+          formatCurrency={formatCurrency}
+          onClose={() => setScheduleFor(null)}
+        />
       )}
     </div>
   );

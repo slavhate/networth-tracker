@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine as build
+FROM node:22-alpine AS build
 
 WORKDIR /app
 
@@ -18,6 +18,7 @@ FROM nginx:alpine
 
 # Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY security-headers.conf /etc/nginx/snippets/security-headers.conf
 
 # Copy built assets with correct permissions
 COPY --from=build /app/dist /usr/share/nginx/html

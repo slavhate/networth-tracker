@@ -1,27 +1,54 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authAPI } from './api';
 
 const AuthContext = createContext(null);
 
+// Thrown by register() when the account was created but the automatic sign-in after it failed
+export class AccountCreatedError extends Error {
+  constructor(cause) {
+    super('Account created, but signing in failed. Please sign in.');
+    this.name = 'AccountCreatedError';
+    this.cause = cause;
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Set when the stored session could not be checked (network error or 5xx); the token is kept
+  const [sessionError, setSessionError] = useState(false);
 
-  useEffect(() => {
+  const restoreSession = useCallback(() => {
     const token = localStorage.getItem('token');
-    if (token) {
-      authAPI.getMe()
-        .then((res) => setUser(res.data))
-        .catch(() => localStorage.removeItem('token'))
-        .finally(() => setLoading(false));
-    } else {
+    if (!token) {
       setLoading(false);
+      return;
     }
+    setLoading(true);
+    setSessionError(false);
+    authAPI.getMe()
+      .then((res) => setUser(res.data))
+      .catch((err) => {
+        if (err?.response?.status === 401) {
+          // Only a rejected token ends the session; the API interceptor also clears it
+          localStorage.removeItem('token');
+          setUser(null);
+        } else {
+          setSessionError(true);
+        }
+      })
+      .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    restoreSession();
+  }, [restoreSession]);
+
+  // The token is stored only once it has been accepted by /me, so a failed check leaves no half session
   const finishLogin = async (accessToken) => {
+    const userResponse = await authAPI.getMe(accessToken);
     localStorage.setItem('token', accessToken);
-    const userResponse = await authAPI.getMe();
+    setSessionError(false);
     setUser(userResponse.data);
     return userResponse.data;
   };
@@ -47,16 +74,23 @@ export function AuthProvider({ children }) {
 
   const register = async (data) => {
     await authAPI.register(data);
-    return login({ username: data.username, password: data.password });
+    try {
+      return await login({ username: data.username, password: data.password });
+    } catch (err) {
+      throw new AccountCreatedError(err);
+    }
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    setSessionError(false);
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, completeMfaLogin, replaceToken, register, logout, loading }}>
+    <AuthContext.Provider value={{
+      user, login, completeMfaLogin, replaceToken, register, logout, loading, sessionError, retrySession: restoreSession
+    }}>
       {children}
     </AuthContext.Provider>
   );

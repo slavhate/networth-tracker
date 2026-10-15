@@ -27,10 +27,18 @@ __pycache__/
 .Python
 venv/
 ENV/
-.env
 
 # Data (keep structure, ignore actual data for git)
 data/*.json
 
 # Docker
 .docker/
+
+# Tests and test tooling (kept locally, not published)
+backend/tests/
+backend/requirements-dev.txt
+backend/.pytest_cache/
+frontend/src/utils/*.check.js
+
+# Design specs and plans (kept locally, not published)
+docs/superpowers/

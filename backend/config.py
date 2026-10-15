@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 import secrets
 import logging
@@ -10,9 +10,12 @@ def _default_secret_key() -> str:
     logger.warning(
         "SECRET_KEY not set — using auto-generated key. "
         "Tokens will not survive restarts. "
-        "Set SECRET_KEY env var for persistent sessions."
+        "Set SECRET_KEY env var for persistent sessions. "
+        "Each process gets its own key, so run a single worker unless SECRET_KEY is set."
     )
     return key
+
+MIN_SECRET_KEY_LENGTH = 32
 
 class Settings(BaseSettings):
     SECRET_KEY: str = ""
@@ -21,11 +24,29 @@ class Settings(BaseSettings):
     MFA_TOKEN_EXPIRE_MINUTES: int = 5  # 2FA login challenge lifetime
     DATA_FILE: str = os.path.join(os.path.dirname(__file__), "..", "data", "data.json")
     CREATE_DEMO_DATA: bool = False
+    ALLOW_REGISTRATION: bool = True  # false: only existing users can log in (POST /api/auth/register returns 403)
+    # Comma-separated addresses or networks of reverse proxies whose X-Real-IP / X-Forwarded-For name the client
+    # (for the login limiter). The default is the range Docker allocates bridge networks from, where the bundled
+    # docker-compose nginx sits; an address outside the list is counted as itself, whatever headers it sends.
+    TRUSTED_PROXIES: str = "172.16.0.0/12"
+    DEMO_USERNAME: str = "demo"
+    DEMO_PASSWORD: str = ""  # empty = a random password is generated when the demo user is created
+    NPS_NAV_API_URL: str = "https://npsnav.in/api"  # NPS scheme list and NAV history (npsnav.in, or a mirror)
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 settings = Settings()
 
-if not settings.SECRET_KEY:
-    settings.SECRET_KEY = _default_secret_key()
+def check_secret_key(s: Settings) -> None:
+    """Fill in a random key when none is set; warn when the one set is too short."""
+    if not s.SECRET_KEY:
+        s.SECRET_KEY = _default_secret_key()
+    elif len(s.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+        # A short key can be guessed offline from any token, which then lets anyone sign in as any user
+        logger.warning(
+            "SECRET_KEY is only %d characters long; use at least %d random characters "
+            "(generate one with: openssl rand -hex 32).",
+            len(s.SECRET_KEY), MIN_SECRET_KEY_LENGTH,
+        )
+
+check_secret_key(settings)

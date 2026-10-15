@@ -1,6 +1,9 @@
-from datetime import datetime, timedelta
+import secrets
+import unicodedata
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Optional
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -11,27 +14,50 @@ import database as db
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
+def has_control_characters(text: str) -> bool:
+    """Whether text holds a control character (NUL, newline, escape, ...), which no username or password needs.
+    bcrypt refuses a NUL outright, so such a password must be turned away before it gets there."""
+    return any(unicodedata.category(ch) == "Cc" for ch in text)
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Slow (bcrypt): async routes run it in a worker thread so it doesn't hold up the event loop."""
+    if has_control_characters(plain_password):
+        return False
     return pwd_context.verify(plain_password[:72], hashed_password)
 
 def get_password_hash(password: str) -> str:
+    """Slow (bcrypt): async routes run it in a worker thread so it doesn't hold up the event loop."""
     return pwd_context.hash(password[:72])
+
+@lru_cache(maxsize=1)
+def dummy_password_hash() -> str:
+    """A hash of a random password nobody knows: a login for an unknown username is checked against it, so it
+    takes as long as one for a real user and the response time doesn't tell whether the username exists."""
+    return get_password_hash(secrets.token_urlsafe(32))
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
+def _decode(token: str) -> Optional[dict]:
+    """The payload of a token signed with our key and algorithm and not expired, else None. The algorithm list
+    is fixed, so a token can't pick its own (e.g. "none")."""
+    try:
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
+                          options={"require": ["exp"]})
+    except jwt.PyJWTError:
+        return None
+
 def decode_access_token(token: str) -> Optional[dict]:
     """Payload of a valid access token (untyped or type "access"), else None."""
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    except JWTError:
+    payload = _decode(token)
+    if payload is None:
         return None
     if payload.get("type") not in (None, "access"):
         return None  # a 2FA challenge token (or any other typed token) is not an access token
@@ -55,9 +81,8 @@ def create_mfa_token(username: str, user_id: str, token_version: int = 0) -> str
     )
 
 def decode_mfa_token(token: str) -> Optional[dict]:
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    except JWTError:
+    payload = _decode(token)
+    if payload is None:
         return None
     if payload.get("type") != "mfa" or not payload.get("sub") or not payload.get("user_id"):
         return None

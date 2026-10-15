@@ -11,7 +11,8 @@ export default function AnimatedNumber({
   value, 
   formatter = (n) => n.toLocaleString(), 
   duration = 1000,
-  privacyMask = null 
+  privacyMask = null,
+  title, // shown on hover, e.g. the full amount behind a short "₹1.25 Crore"
 }) {
   const [displayValue, setDisplayValue] = useState(0);
   const [hasAnimated, setHasAnimated] = useState(false);
@@ -26,6 +27,15 @@ export default function AnimatedNumber({
     }
 
     const targetValue = value || 0;
+
+    // Respect the "reduce motion" accessibility setting: show the final value straight away
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayValue(targetValue);
+      previousValueRef.current = targetValue;
+      setHasAnimated(true);
+      return;
+    }
+
     const startValue = hasAnimated ? previousValueRef.current : 0;
     
     // Easing function for smooth animation
@@ -68,60 +78,5 @@ export default function AnimatedNumber({
     return <>{privacyMask}</>;
   }
 
-  return <>{formatter(displayValue)}</>;
-}
-
-/**
- * Custom hook for animated numbers (alternative to component)
- */
-export function useAnimatedNumber(targetValue, duration = 1000, enabled = true) {
-  const [displayValue, setDisplayValue] = useState(0);
-  const startTimeRef = useRef(null);
-  const animationFrameRef = useRef(null);
-  const previousValueRef = useRef(0);
-  const hasAnimatedRef = useRef(false);
-
-  useEffect(() => {
-    if (!enabled) {
-      setDisplayValue(targetValue || 0);
-      return;
-    }
-
-    const target = targetValue || 0;
-    const startValue = hasAnimatedRef.current ? previousValueRef.current : 0;
-    
-    const easeOutQuart = (t) => 1 - Math.pow(1 - t, 4);
-
-    const animate = (timestamp) => {
-      if (!startTimeRef.current) {
-        startTimeRef.current = timestamp;
-      }
-
-      const elapsed = timestamp - startTimeRef.current;
-      const progress = Math.min(elapsed / duration, 1);
-      const easedProgress = easeOutQuart(progress);
-      
-      const currentValue = startValue + (target - startValue) * easedProgress;
-      setDisplayValue(currentValue);
-
-      if (progress < 1) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      } else {
-        setDisplayValue(target);
-        previousValueRef.current = target;
-        hasAnimatedRef.current = true;
-      }
-    };
-
-    startTimeRef.current = null;
-    animationFrameRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-  }, [targetValue, duration, enabled]);
-
-  return displayValue;
+  return title ? <span title={title}>{formatter(displayValue)}</span> : <>{formatter(displayValue)}</>;
 }

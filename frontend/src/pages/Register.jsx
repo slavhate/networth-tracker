@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth, AccountCreatedError } from '../AuthContext';
 import { Eye, EyeOff } from 'lucide-react';
+import { errorMessage } from '../utils/errors';
 
 export default function Register() {
   const [formData, setFormData] = useState({ 
@@ -11,6 +12,7 @@ export default function Register() {
     confirmPassword: '' 
   });
   const [error, setError] = useState('');
+  const [accountCreated, setAccountCreated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const { register } = useAuth();
@@ -18,7 +20,9 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // A new attempt starts clean, so the success and error boxes never show together
     setError('');
+    setAccountCreated(false);
 
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match');
@@ -40,7 +44,12 @@ export default function Register() {
       });
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed. Please try again.');
+      if (err instanceof AccountCreatedError) {
+        // The account exists; retrying registration would only say "already registered"
+        setAccountCreated(true);
+        return;
+      }
+      setError(errorMessage(err, 'Registration failed. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -51,9 +60,7 @@ export default function Register() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
-            <span className="text-4xl">💰</span>
-          </div>
+          <img src="/logo.png" alt="NetWorth Tracker" className="inline-block w-16 h-16 rounded-2xl shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
           <p className="text-gray-600 mt-1">Start tracking your net worth today</p>
         </div>
@@ -61,6 +68,13 @@ export default function Register() {
         {/* Form */}
         <div className="bg-white rounded-2xl shadow-xl p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
+            {accountCreated && (
+              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm" role="status">
+                Account created, but signing in failed. Please{' '}
+                <Link to="/login" className="font-medium underline">sign in</Link>.
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
                 {error}
