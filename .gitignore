@@ -33,3 +33,9 @@ data/*.json
 
 # Docker
 .docker/
+
+# Tests and test tooling (kept locally, not published)
+backend/tests/
+backend/requirements-dev.txt
+backend/.pytest_cache/
+frontend/src/utils/*.check.js
