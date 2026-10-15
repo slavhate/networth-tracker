@@ -110,7 +110,7 @@ export default function Equities() {
   };
 
   useEffect(() => {
-    fetchEquities(true); // Refresh prices on initial load
+    fetchEquities(); // Last fetched prices; live prices only via Refresh Prices
     fetchExchangeRate();  // Get current exchange rate
   }, []);
 
@@ -185,7 +185,7 @@ export default function Equities() {
       }
 
       closeModal();
-      fetchEquities(true);
+      fetchEquities(); // a new holding gets its own price when it is created
     } catch (err) {
       setError(errorMessage(err, 'Failed to save equity'));
     } finally {
