@@ -192,7 +192,8 @@ export default function Layout() {
         lg:relative lg:translate-x-0 lg:flex-shrink-0
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
-        <div className="h-full flex flex-col">
+        {/* Scrolls when the screen is shorter than the menu (phones), so the account buttons stay reachable */}
+        <div className="h-full flex flex-col overflow-y-auto overscroll-contain">
           {/* Logo */}
           <div className="p-6 border-b border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between">
