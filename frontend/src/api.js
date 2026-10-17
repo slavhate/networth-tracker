@@ -90,6 +90,12 @@ export const assetsAPI = {
   update: (id, data) => api.put(`/api/assets/${seg(id)}`, data),
   delete: (id) => api.delete(`/api/assets/${seg(id)}`),
   refreshNav: (id) => api.post(`/api/assets/${seg(id)}/refresh-nav`),
+  refreshMetalRates: () => api.post('/api/assets/refresh-metal-rates'),
+};
+
+// Gold and silver rates last fetched (stored; reading them never fetches new ones)
+export const metalRatesAPI = {
+  get: () => api.get('/api/metal-rates'),
 };
 
 // NPS API

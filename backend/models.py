@@ -98,7 +98,6 @@ StoredNpsSchemes = Annotated[List[NpsSchemeStored], Field(min_length=1, max_leng
 
 class AssetCategory(str, Enum):
     CASH = "cash"
-    INVESTMENTS = "investments"
     REAL_ESTATE = "real_estate"
     VEHICLES = "vehicles"
     RETIREMENT = "retirement"
@@ -107,10 +106,36 @@ class AssetCategory(str, Enum):
     PPF = "ppf"
     NPS = "nps"
     GOLD = "gold"
-    SGB = "sgb"          # Sovereign Gold Bonds
+    SILVER = "silver"
     BONDS = "bonds"
-    ESOP_RSU = "esop_rsu"
     OTHER = "other"
+
+
+# Purity grades a gold or silver holding can have, as the fraction of pure metal; the first is the default
+METAL_PURITIES: Dict[str, Dict[str, float]] = {
+    "gold": {"24K": 0.999, "22K": 0.916, "18K": 0.75},
+    "silver": {"999": 0.999, "925": 0.925},
+}
+
+
+def purity_fraction(category: Optional[str], purity: Optional[str]) -> Optional[float]:
+    """The share of pure metal in a gold or silver holding (the category's default grade when none is set); None for
+    any other category or a grade the category doesn't have."""
+    grades = METAL_PURITIES.get(category or "")
+    if not grades:
+        return None
+    return grades.get(purity) if purity is not None else next(iter(grades.values()))
+
+
+def check_purity(category: Optional[str], purity: Optional[str]) -> None:
+    """Only gold and silver have a purity, and only one of their own grades."""
+    if purity is None:
+        return
+    grades = METAL_PURITIES.get(category or "")
+    if not grades:
+        raise PydanticCustomError("purity", "Only gold and silver have a purity")
+    if purity not in grades:
+        raise PydanticCustomError("purity", "Purity must be one of {grades}", {"grades": ", ".join(grades)})
 
 class LiabilityCategory(str, Enum):
     MORTGAGE = "mortgage"
@@ -196,6 +221,12 @@ class AssetBase(InputModel):
     yearly_contribution: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)  # NPS: the subscriber's own, per year
     yearly_contribution_month: Optional[int] = Field(None, ge=1, le=12)  # NPS: month it's paid (March if unset)
     nps_schemes: Optional[NpsSchemes] = None  # NPS investment options
+    purity: Optional[str] = Field(None, max_length=10)  # gold/silver: a METAL_PURITIES grade (24K or 999 if unset)
+
+    @model_validator(mode="after")
+    def purity_fits_category(self):
+        check_purity(self.category.value, self.purity)
+        return self
 
 class Asset(AssetBase):
     id: str
@@ -228,6 +259,21 @@ class AssetUpdate(InputModel):
     yearly_contribution: Optional[float] = Field(None, ge=0, le=MAX_AMOUNT)  # NPS: the subscriber's own, per year
     yearly_contribution_month: Optional[int] = Field(None, ge=1, le=12)  # NPS: month it's paid (March if unset)
     nps_schemes: Optional[NpsSchemes] = None  # NPS investment options
+    purity: Optional[str] = Field(None, max_length=10)  # gold/silver; checked against the category the asset ends up in
+
+
+class MetalRates(BaseModel):
+    """The last gold and silver rates fetched for a user: ₹ per gram of pure metal, import duty included"""
+    gold_per_gram: Optional[float] = None
+    silver_per_gram: Optional[float] = None
+    fetched_at: Optional[str] = None  # ISO date-time, UTC
+    source: Optional[str] = None
+    import_duty_pct: Optional[float] = None
+
+
+class MetalRatesRefresh(BaseModel):
+    rates: MetalRates
+    updated: int  # gold and silver assets repriced
 
 class LiabilityBase(InputModel):
     name: str = Field(..., min_length=1, max_length=100)

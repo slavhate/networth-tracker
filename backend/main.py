@@ -18,7 +18,7 @@ from config import settings
 from models import (
     UserCreate, User, Token, MfaLoginRequest,
     TwoFactorEnable, TwoFactorDisable, TwoFactorStatus, TwoFactorSetup, TwoFactorBackupCodes, PasswordChange,
-    Asset, AssetCreate, AssetUpdate, NpsSchemeOption,
+    Asset, AssetCreate, AssetUpdate, NpsSchemeOption, MetalRates, MetalRatesRefresh, check_purity, purity_fraction,
     Liability, LiabilityCreate, LiabilityUpdate,
     DashboardMetrics, NetWorthSnapshot, SnapshotSettings, SnapshotSettingsView,
     BankAccount, BankAccountCreate, BankAccountUpdate,
@@ -37,6 +37,7 @@ import login_limiter
 import two_factor
 import stock_service
 import exchange_service
+import metal_service
 import nav_service
 import nps_service
 import restore
@@ -47,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        db.upgrade_data_file()
+    except (OSError, ValueError):
+        # Every load upgrades rows in memory too, so the app still works on a file that can't be rewritten now
+        logger.warning("Could not save the data file with older rows brought up to date", exc_info=True)
     await startup_event()
     yield
 
@@ -496,6 +502,22 @@ def _value_from_quantity(row: dict) -> dict:
     return {"value": value}
 
 
+def _purity_change(current: dict, changes: dict) -> dict:
+    """An update's purity must fit the category the asset ends up in. A category change that doesn't send one drops
+    a stored purity the new category doesn't have (gold's 22K on a move to silver or cash)."""
+    category = changes.get("category") or current.get("category")
+    if "purity" in changes:
+        try:
+            check_purity(category, changes["purity"])
+        except ValueError as e:  # PydanticCustomError is a ValueError
+            raise HTTPException(status_code=422, detail=str(e))
+        return {}
+    stored = current.get("purity")
+    if stored is not None and purity_fraction(category, stored) is None:
+        return {"purity": None}
+    return {}
+
+
 def _liability_defaults(row: dict) -> dict:
     """An EMI needs a balance date to count payments from."""
     if row.get("emi") and not row.get("balance_date"):
@@ -626,6 +648,7 @@ async def update_asset(asset_id: str, update_data: AssetUpdate, user_id: str = D
     if not current:
         raise HTTPException(status_code=404, detail="Asset not found")
     changes = update_data.model_dump(exclude_unset=True)
+    changes.update(_purity_change(current, changes))
     changes.update(_value_from_quantity(_merged(current, changes, db.ASSET_CLEARABLE)))
     changes.update(_asset_defaults(_merged(current, changes, db.ASSET_CLEARABLE)))
     merged = _merged(current, changes, db.ASSET_CLEARABLE)
@@ -667,6 +690,48 @@ async def refresh_asset_nav(asset_id: str, user_id: str = Depends(get_user_id)):
     if _nps_inputs(fresh) != _nps_inputs(asset):
         return valuation.asset_view(fresh, on)
     return valuation.asset_view(db.update_asset(asset_id, user_id, pricing), on)
+
+def _metal_unit_price(asset: dict, rates: dict) -> Optional[float]:
+    """Today's price per gram of a gold or silver holding: the metal's rate × the holding's purity, to the paisa."""
+    fraction = purity_fraction(asset.get("category"), asset.get("purity"))
+    rate = rates.get(f"{asset.get('category')}_per_gram")
+    return round(rate * fraction, 2) if fraction is not None and rate else None
+
+
+@app.post("/api/assets/refresh-metal-rates", response_model=MetalRatesRefresh)
+async def refresh_metal_rates(user_id: str = Depends(get_user_id)):
+    """Fetch gold and silver rates and reprice every gold and silver holding (by quantity) at them, as of today"""
+    rates = await metal_service.fetch_rates()
+    if rates is None:
+        user_warnings.warn("Couldn't fetch gold and silver rates right now; values use the last saved prices.")
+        raise HTTPException(status_code=502, detail="Couldn't fetch gold and silver rates right now")
+    if not rates.pop("usd_inr_live"):
+        user_warnings.warn("Couldn't fetch the USD→INR rate; gold and silver rates use the last known rate.")
+    on = _today_iso()
+
+    def reprice(asset: dict) -> Optional[dict]:
+        unit_price = _metal_unit_price(asset, rates)
+        quantity = asset.get("quantity")
+        if unit_price is None or quantity is None:  # a holding entered as a plain value has no grams to price
+            return None
+        value = round(quantity * unit_price, 2)
+        if not (unit_price <= MAX_AMOUNT and value <= MAX_AMOUNT):
+            return None
+        return {"unit_price": unit_price, "value": value, "valuation_date": on}
+
+    # Worked out and saved in one pass over the stored rows, so an edit saved while the rates were fetched is priced
+    # as it now is rather than overwritten
+    updated = db.reprice_assets(user_id, reprice, {"metal_rates": rates})
+    return {"rates": rates, "updated": updated}
+
+
+@app.get("/api/metal-rates", response_model=MetalRates)
+async def get_metal_rates(user_id: str = Depends(get_user_id)):
+    """The gold and silver rates last fetched for this user (all null before the first refresh); never fetches"""
+    user = db.get_user_by_id(user_id) or {}
+    stored = user.get("metal_rates")
+    return stored if isinstance(stored, dict) else {}
+
 
 @app.get("/api/nps/schemes", response_model=List[NpsSchemeOption])
 async def get_nps_schemes(user_id: str = Depends(get_user_id)):
@@ -1515,7 +1580,6 @@ async def startup_event():
         sample_assets = [
             {"name": "Emergency Fund", "category": "cash", "value": 300000, "notes": "HDFC Savings account"},
             {"name": "Cash at Home", "category": "cash", "value": 50000, "notes": "Petty cash and emergency"},
-            {"name": "Direct Equity Portfolio", "category": "investments", "value": 450000, "notes": "Stocks in Zerodha - TCS, Infosys, HDFC Bank"},
             {"name": "PPF Account", "category": "ppf", "value": 850000, "notes": "SBI PPF - 10 years maturity", "interest_rate": 7.1, "monthly_contribution": 12500, "valuation_date": iso(valuation.add_months(on, -6))},
             {"name": "Primary Residence", "category": "real_estate", "value": 8500000, "notes": "3BHK Apartment in Bangalore"},
             {"name": "Agricultural Land", "category": "real_estate", "value": 2500000, "notes": "2 acres in native village"},
@@ -1535,7 +1599,8 @@ async def startup_event():
              ]},
             {"name": "Bitcoin Holdings", "category": "crypto", "value": 150000, "notes": "0.05 BTC on WazirX"},
             {"name": "Ethereum Holdings", "category": "crypto", "value": 75000, "notes": "0.5 ETH"},
-            {"name": "Gold Jewelry", "category": "gold", "value": 500000, "notes": "Family gold - 50 grams", "quantity": 50, "unit_price": 10000},
+            {"name": "Gold Jewelry", "category": "gold", "value": 500000, "notes": "Family gold - 50 grams", "quantity": 50, "unit_price": 10000, "purity": "22K"},
+            {"name": "Silver Coins", "category": "silver", "value": 90000, "notes": "Festival coins - 500 grams", "quantity": 500, "unit_price": 180, "purity": "999"},
             {"name": "MacBook Pro", "category": "other", "value": 180000, "notes": "M2 Pro - Work laptop"},
         ]
         for asset in sample_assets:

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { assetsAPI, npsAPI } from '../api';
+import { assetsAPI, metalRatesAPI, npsAPI } from '../api';
 import { usePrivacy } from '../PrivacyContext';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { formatShortINR } from '../utils/indianNumbers';
@@ -11,11 +11,12 @@ import ItemTile, { ItemTileGrid } from '../components/ItemTile';
 import {
   Plus,
   X,
-  Wallet
+  Wallet,
+  RefreshCw
 } from 'lucide-react';
 import { errorMessage } from '../utils/errors';
 import { todayIso, formatDate, daysUntil } from '../utils/dates';
-import { ASSET_CATEGORIES, assetCategoryInfo } from '../utils/assetCategories';
+import { ASSET_CATEGORIES, assetCategoryInfo, purityOf } from '../utils/assetCategories';
 
 // Suggested yearly change when a category is picked; the user can change or clear it.
 const SUGGESTED_YEARLY_CHANGE = { vehicles: '-15', real_estate: '5' };
@@ -31,8 +32,23 @@ const MONTHS = [
 const emptyForm = () => ({
   name: '', value: '', category: 'cash', description: '', annual_change_rate: '', valuation_date: todayIso(),
   monthly_contribution: '', interest_rate: '', quantity: '', unit_price: '',
-  yearly_contribution: '', yearly_contribution_month: '3', nps_schemes: [],
+  yearly_contribution: '', yearly_contribution_month: '3', nps_schemes: [], purity: '',
 });
+
+const formatRatesTime = (iso) => {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(date);
+};
+
+// A metal's price per gram at a grade, to the paisa, from the last fetched rate (₹ per gram of pure metal)
+const metalPrice = (rates, category, purity) => {
+  const grade = purityOf(category, purity);
+  const rate = rates?.[`${category}_per_gram`];
+  return grade && rate ? Math.round(rate * grade.fraction * 100) / 100 : null;
+};
 
 const formatCurrencyRaw = (value) => {
   return new Intl.NumberFormat('en-IN', {
@@ -66,6 +82,10 @@ export default function Assets() {
   const [npsSchemesError, setNpsSchemesError] = useState('');
   const [refreshingIds, setRefreshingIds] = useState([]);
   const [refreshErrors, setRefreshErrors] = useState({});   // asset id -> why its last manual NAV refresh failed
+  const [metalRates, setMetalRates] = useState(null);       // the gold and silver rates last fetched (stored)
+  const [refreshingMetals, setRefreshingMetals] = useState(false);
+  const [metalRatesError, setMetalRatesError] = useState('');
+  const [priceTouched, setPriceTouched] = useState(false);  // the price per gram was typed in this form
   const backgroundRefresh = useRef(false);
 
   const fetchAssets = async () => {
@@ -121,7 +141,25 @@ export default function Assets() {
 
   useEffect(() => {
     fetchAssets();
+    // The rates fetched last time, as stored: new rates are fetched only by the refresh button
+    metalRatesAPI.get().then((response) => setMetalRates(response.data)).catch(() => {});
   }, []);
+
+  const refreshMetalRates = async () => {
+    setRefreshingMetals(true);
+    setMetalRatesError('');
+    try {
+      const response = await assetsAPI.refreshMetalRates();
+      setMetalRates(response.data.rates);
+      const list = await assetsAPI.getAll();
+      setAssets(list.data);
+      updateLastUpdated();
+    } catch (err) {
+      setMetalRatesError(errorMessage(err, "Couldn't refresh gold and silver rates"));
+    } finally {
+      setRefreshingMetals(false);
+    }
+  };
 
   const openModal = (asset = null) => {
     if (asset) {
@@ -139,6 +177,7 @@ export default function Assets() {
         unit_price: asset.unit_price?.toString() ?? '',
         yearly_contribution: asset.yearly_contribution?.toString() ?? '',
         yearly_contribution_month: asset.yearly_contribution_month?.toString() ?? '3',
+        purity: purityOf(asset.category, asset.purity)?.value ?? '',
         nps_schemes: (asset.nps_schemes || []).map((s) => ({
           scheme_code: s.scheme_code,
           scheme_name: s.scheme_name,
@@ -148,11 +187,13 @@ export default function Assets() {
       });
       setRateTouched(true);
       setInterestTouched(asset.interest_rate != null);
+      setPriceTouched(true);
     } else {
       setEditingAsset(null);
       setFormData(emptyForm());
       setRateTouched(false);
       setInterestTouched(false);
+      setPriceTouched(false);
     }
     setAnchorState('stored');
     setDateChosen(false);
@@ -168,6 +209,14 @@ export default function Assets() {
 
   const kind = assetCategoryInfo(formData.category).kind;
   const unit = assetCategoryInfo(formData.category).unit;
+  const purities = assetCategoryInfo(formData.category).purities;
+
+  // A new gold or silver asset's price per gram follows the last fetched rate × purity until the user types one
+  const suggestedPrice = (category, purity) => {
+    if (editingAsset || priceTouched) return {};
+    const price = metalPrice(metalRates, category, purity);
+    return { unit_price: price != null ? price.toString() : '' };
+  };
 
   // The scheme list is loaded the first time an NPS form opens, and kept for the rest of the visit.
   useEffect(() => {
@@ -239,6 +288,7 @@ export default function Assets() {
         interest_rate: kind === 'provident' ? num(formData.interest_rate) : null,
         quantity: kind === 'quantity' ? num(formData.quantity) : null,
         unit_price: kind === 'quantity' ? num(formData.unit_price) : null,
+        purity: purities ? formData.purity || null : null,
         nps_schemes: kind === 'nps' && formData.nps_schemes.length
           ? formData.nps_schemes.map((r) => ({
             scheme_code: r.scheme_code,
@@ -281,6 +331,12 @@ export default function Assets() {
   };
 
   const totalAssets = assets.reduce((sum, asset) => sum + asset.current_value, 0);
+  const hasMetals = assets.some((a) => assetCategoryInfo(a.category).purities);
+  const ratePerGram = (category) => {
+    const price = metalPrice(metalRates, category, null);
+    if (price == null) return '—';
+    return privacyMode ? '₹ ••••' : `${formatCurrencyRaw(price)}/g`;
+  };
 
   if (loading) {
     return (
@@ -298,10 +354,20 @@ export default function Assets() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Assets</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your assets and track their value</p>
         </div>
-        <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          Add Asset
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={refreshMetalRates}
+            disabled={refreshingMetals}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshingMetals ? 'animate-spin' : ''}`} />
+            {refreshingMetals ? 'Refreshing...' : 'Refresh gold & silver rates'}
+          </button>
+          <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" />
+            Add Asset
+          </button>
+        </div>
       </div>
 
       <PageError
@@ -328,7 +394,22 @@ export default function Assets() {
             <Wallet className="w-8 h-8" />
           </div>
         </div>
+        {(metalRates?.fetched_at || hasMetals) && (
+          <p
+            className="mt-3 text-sm text-primary-100"
+            title={metalRates?.fetched_at
+              ? `International spot price in ₹ per gram, with ${metalRates.import_duty_pct ?? 0}% import duty and without GST (${metalRates.source})`
+              : undefined}
+          >
+            {metalRates?.fetched_at
+              ? `Gold 24K ${ratePerGram('gold')} · Silver 999 ${ratePerGram('silver')} · updated ${formatRatesTime(metalRates.fetched_at)}`
+              : 'Gold and silver rates not fetched yet: use Refresh gold & silver rates'}
+          </p>
+        )}
       </div>
+      {metalRatesError && (
+        <p role="alert" className="-mt-3 text-sm text-red-600 dark:text-red-400">{metalRatesError}</p>
+      )}
 
       {/* Assets List */}
       {assets.length === 0 ? loaded && (
@@ -368,7 +449,8 @@ export default function Assets() {
                 )}
                 {categoryInfo.kind === 'quantity' && asset.quantity != null && asset.unit_price != null && (
                   <p>
-                    {privacyMode ? '••' : asset.quantity} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
+                    {privacyMode ? '••' : asset.quantity.toLocaleString('en-IN', { maximumFractionDigits: 4 })} {categoryInfo.unit} × {formatCurrency(asset.unit_price)}/{categoryInfo.unit === 'g' ? 'g' : 'unit'}
+                    {categoryInfo.purities ? ` (${purityOf(asset.category, asset.purity).value})` : ''}
                   </p>
                 )}
                 {categoryInfo.kind === 'nps' && asset.valuation_date
@@ -455,6 +537,11 @@ export default function Assets() {
                       ...(keepsTodaysValue ? todaysValueFields() : {}),
                       ...(rateTouched ? {} : { annual_change_rate: SUGGESTED_YEARLY_CHANGE[category] ?? '' }),
                       ...(interestTouched ? {} : { interest_rate: SUGGESTED_INTEREST[category] ?? '' }),
+                      ...(() => {
+                        // A metal keeps its grade when it has it, else starts at the default; others have none
+                        const purity = purityOf(category, f.purity)?.value ?? '';
+                        return { purity, ...(assetCategoryInfo(category).purities ? suggestedPrice(category, purity) : {}) };
+                      })(),
                     }));
                   }}
                 >
@@ -681,6 +768,23 @@ export default function Assets() {
                     />
                   </div>
 
+                  {purities && (
+                    <div>
+                      <label className="label">Purity</label>
+                      <select
+                        className="input"
+                        value={formData.purity}
+                        onChange={(e) => setFormData({ ...formData, purity: e.target.value, ...suggestedPrice(formData.category, e.target.value) })}
+                      >
+                        {purities.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {p.value} ({Math.round(p.fraction * 1000)} fine)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div>
                     <label className="label">Price per {unit === 'g' ? 'gram' : 'unit'} (₹)</label>
                     <input
@@ -690,9 +794,18 @@ export default function Assets() {
                       min="0"
                       step="any"
                       value={formData.unit_price}
-                      onChange={(e) => setFormData({ ...formData, unit_price: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() })}
+                      onChange={(e) => {
+                        setPriceTouched(true);
+                        setFormData({ ...formData, unit_price: e.target.value, valuation_date: dateChosen ? formData.valuation_date : todayIso() });
+                      }}
                       required
                     />
+                    {purities && metalPrice(metalRates, formData.category, formData.purity) != null && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                        Market rate {formatCurrency(metalPrice(metalRates, formData.category, formData.purity))}/g at this purity,
+                        fetched {formatRatesTime(metalRates.fetched_at)}. Refresh gold &amp; silver rates updates every gold and silver asset.
+                      </p>
+                    )}
                   </div>
 
                   <div>
