@@ -36,7 +36,7 @@ _Screenshots use the built-in demo data (`CREATE_DEMO_DATA=true`); all names and
 - **Containerized** - Easy deployment with Docker
 
 ### Asset & Liability Management
-- **Asset Management** - Track all your assets with categories (Cash & Savings, Investments, Real Estate, Vehicles, EPF, PPF, NPS, Other retirement, Gold, Sovereign Gold Bonds, Bonds, ESOP / RSU, Cryptocurrency, Other)
+- **Asset Management** - Track all your assets with categories (Cash & Savings, Real Estate, Vehicles, EPF, PPF, NPS, Other retirement, Gold, Silver, Bonds, Cryptocurrency, Other). Stocks and mutual funds have their own pages. The earlier Investments, Sovereign Gold Bonds and ESOP / RSU categories were retired: existing assets and restored backups move automatically (Sovereign Gold Bonds become 24K gold, one bond to a gram; Investments become Other; ESOP / RSU become Other, valued at quantity × price)
 - **Liability Tracking** - Manage debts with interest rate tracking (Mortgage, Car Loan, Student Loan, Credit Card, Personal Loan)
 - **Yearly Change Rates** - Give an asset a yearly change rate and it revalues itself every day from the last value and date you entered: vehicles depreciate, property appreciates. Picking Vehicles or Real Estate suggests a rate (-15% and +5%) that you can change or clear
 - **EPF & PPF** - Enter the balance as it stands on a date (the passbook or statement balance, including the interest earned up to then), a monthly contribution and the interest rate, and the tracker grows it to today. Contributions count from the month after the balance date. Interest is worked out monthly on the running balance and credited every 31 March. Re-enter the balance and its date from each annual statement and the figures stay exact. Contribution changes start from today (the edit form moves the balance to today's value and today's date for you), while a rate change applies from the balance date
@@ -49,7 +49,9 @@ _Screenshots use the built-in demo data (`CREATE_DEMO_DATA=true`); all names and
   - **Asset classes** - Scheme E counts as equity, schemes C and G as debt, scheme A as other, and any other scheme (government, Lite, Vatsalya) splits 50/50. An NPS asset without schemes splits 50/50 too
   - **Changing contributions** - Unlike EPF and PPF, this doesn't move the balance to today. When your contributions change, update the balance, its date and the units from your latest statement
   - NAVs from npsnav.in (data from the NPS CRA, CC BY-NC 4.0; personal use)
-- **Quantity × Price** - Gold, SGB and ESOP/RSU can be entered as a quantity and a price (per gram for gold and SGB, per share or unit for ESOP/RSU), and the value is quantity × price
+- **Gold & Silver** - Entered as grams, a purity (gold 24K, 22K or 18K; silver 999 or 925; 24K and 999 when not set) and a price per gram; the value is grams × price:
+  - **Market rates** - The Assets page's "Refresh Rates" button fetches the international spot price (USD per troy ounce) from gold-api.com, or Yahoo Finance's gold and silver futures when that is down, converts it to ₹ per gram with the live USD→INR rate and adds India's import duty on the metals (`METAL_IMPORT_DUTY_PCT`, 6% by default; GST is left out, as market rates are quoted before GST). Every gold and silver asset is then repriced at rate × purity, dated today. Rates are fetched only when you click: the page shows the last fetched rates and when they were fetched, and a new gold or silver asset's price per gram starts from them (you can type your own)
+  - The rates follow the international market, so they can differ a little from your local jeweller's rate, which includes their own margin
 - **EMI Loans** - Give a loan its EMI, or just its tenure and the EMI is worked out (rounded up to the paisa), and the tracker pays it down for you:
   - Today's outstanding balance, which is what counts toward net worth
   - Payoff date and the interest still left to pay
@@ -82,7 +84,7 @@ _Screenshots use the built-in demo data (`CREATE_DEMO_DATA=true`); all names and
   - Asset allocation pie chart
   - Liability breakdown bar chart
   - Net worth history line chart
-  - Allocation by asset class (equity, debt, gold, real estate, cash, other) and an allocation-history chart
+  - Allocation by asset class (equity, debt, gold & silver, real estate, cash, other) and an allocation-history chart
   - Month-over-month change in net worth
   - Key metrics (Debt-to-Asset Ratio)
 - **Net Worth Goal Tracker**:
@@ -102,7 +104,7 @@ _Screenshots use the built-in demo data (`CREATE_DEMO_DATA=true`); all names and
 Your **Net Worth** is the total value of everything you own minus everything you owe. Here's what gets counted:
 
 ### What's Added (Your Assets)
-- **Assets** - Cash, real estate, vehicles, retirement accounts (EPF, PPF, NPS), gold and Sovereign Gold Bonds, bonds, ESOP / RSU, cryptocurrency, and other valuables you've added, valued as of today (an asset with a yearly change rate is revalued from its last entered value)
+- **Assets** - Cash, real estate, vehicles, retirement accounts (EPF, PPF, NPS), gold, silver, bonds, cryptocurrency, and other valuables you've added, valued as of today (an asset with a yearly change rate is revalued from its last entered value)
 - **Bank Accounts** - The total value across all your savings, current, salary, and deposit accounts (an FD or RD with an interest rate and dates includes the interest earned so far)
 - **Mutual Funds** - The current value of all your mutual fund investments (units × current NAV, including the units your SIP installments have bought)
 - **Equities (Stocks)** - The current market value of your stock portfolio. For US stocks (NASDAQ and NYSE), the value is automatically converted from USD to INR using live exchange rates
@@ -121,12 +123,12 @@ Alongside the breakdown by where an asset sits (category), the dashboard shows w
 
 | Class | What counts |
 |-------|-------------|
-| Equity | Stocks, equity / ELSS / index mutual funds, ESOP / RSU, NPS scheme E, and half of hybrid funds and of NPS money not in an E, C, G or A scheme |
+| Equity | Stocks, equity / ELSS / index mutual funds, NPS scheme E, and half of hybrid funds and of NPS money not in an E, C, G or A scheme |
 | Debt | EPF, PPF, bonds, retirement accounts, FDs and RDs, debt / liquid mutual funds, NPS schemes C and G, and half of hybrid funds and of NPS money not in an E, C, G or A scheme |
-| Gold | Gold and Sovereign Gold Bonds |
+| Gold & Silver | Gold and silver |
 | Real estate | Real estate |
 | Cash | Cash and savings / current / salary accounts |
-| Other | Investments, vehicles, cryptocurrency, NPS scheme A, other assets and funds, and anything without a known category |
+| Other | Vehicles, cryptocurrency, NPS scheme A, other assets and funds, and anything without a known category |
 
 ### Snapshots
 - A snapshot records your total assets, total liabilities and net worth on a date, together with the breakdown by category and by asset class, so past allocations can be charted.
@@ -335,6 +337,7 @@ networth-tracker/
 │   ├── stock_service.py  # Yahoo Finance stock price fetching
 │   ├── nav_service.py    # Mutual fund NAV fetching from mfapi.in
 │   ├── nps_service.py    # NPS scheme list and NAV history from npsnav.in
+│   ├── metal_service.py  # Gold and silver rates (gold-api.com, Yahoo Finance fallback) in ₹ per gram
 │   ├── exchange_service.py # Live USD/INR exchange rate
 │   ├── config.py         # Configuration settings
 │   ├── requirements.txt  # Python dependencies
@@ -394,6 +397,8 @@ networth-tracker/
 | GET | `/api/assets/{id}` | Get asset by ID |
 | PUT | `/api/assets/{id}` | Update asset |
 | DELETE | `/api/assets/{id}` | Delete asset |
+| POST | `/api/assets/refresh-metal-rates` | Fetch gold and silver rates and reprice every gold and silver asset at rate × purity, dated today; returns the rates and how many assets changed (502, with nothing changed, when the rates can't be fetched) |
+| GET | `/api/metal-rates` | The gold and silver rates last fetched (₹ per gram of pure metal, with when and from where); never fetches |
 | POST | `/api/assets/{id}/refresh-nav` | Price an NPS asset's schemes again with the latest NAVs (400 without NPS schemes, 502 when the NAVs can't be fetched) |
 | GET | `/api/nps/schemes` | Every NPS scheme with its latest NAV, for choosing investment options (502 when the list can't be fetched) |
 
@@ -522,6 +527,8 @@ Click "Refresh Prices" on the Equities page to fetch the latest stock prices.
 | `DEMO_PASSWORD` | _(random)_ | Password of the demo user. If unset, a random password is generated and printed once in the backend log. Only applied when the demo user is first created |
 | `DATA_FILE` | `../data/data.json` | Path to the JSON database file |
 | `NPS_NAV_API_URL` | `https://npsnav.in/api` | Base URL of the NPS scheme list and NAV API (npsnav.in). Point it at a mirror or a self-hosted copy of the same API |
+| `METAL_PRICE_API_URL` | `https://api.gold-api.com/price` | Base URL of the gold and silver spot price API (gold-api.com: `/XAU` and `/XAG`, USD per troy ounce). Yahoo Finance futures are the fallback |
+| `METAL_IMPORT_DUTY_PCT` | `6.0` | India's customs duty on gold and silver, in %, added to the international spot price when gold and silver rates are worked out. Change it when the duty changes; GST is not added, as market rates are quoted before GST |
 | `TZ` | _(system timezone; UTC in Docker)_ | Timezone for "today", the date loan balances, FD/RD values and revalued assets are worked out for, and the month and date of automatic snapshots and of the snapshots you save. Near midnight a UTC server is still on the previous day in India; set `TZ=IST-5:30` (POSIX form, works without tzdata) to use Indian time |
 
 ### Frontend

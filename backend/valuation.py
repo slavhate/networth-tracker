@@ -500,8 +500,8 @@ _HALF_EQUITY_HALF_DEBT = {"equity": 0.5, "debt": 0.5}  # NPS and hybrid funds: t
 ASSET_CATEGORY_CLASSES = {
     "cash": {"cash": 1}, "real_estate": {"real_estate": 1},
     "epf": {"debt": 1}, "ppf": {"debt": 1}, "bonds": {"debt": 1}, "retirement": {"debt": 1},
-    "gold": {"gold": 1}, "sgb": {"gold": 1}, "esop_rsu": {"equity": 1}, "nps": _HALF_EQUITY_HALF_DEBT,
-    "investments": _OTHER, "vehicles": _OTHER, "crypto": _OTHER, "other": _OTHER,
+    "gold": {"gold": 1}, "silver": {"gold": 1}, "nps": _HALF_EQUITY_HALF_DEBT,  # the "gold" class is gold & silver
+    "vehicles": _OTHER, "crypto": _OTHER, "other": _OTHER,
 }
 BANK_ACCOUNT_CLASSES = {"savings": {"cash": 1}, "current": {"cash": 1}, "salary": {"cash": 1},
                         "fd": {"debt": 1}, "rd": {"debt": 1}}

@@ -5,6 +5,8 @@ from typing import Any, Dict, Type
 
 from pydantic import BaseModel, ValidationError
 
+from database import upgrade_asset  # a pure function on a row: restore still never touches storage
+
 from models import (
     AssetRestore, LiabilityRestore, BankAccountRestore, InsuranceRestore,
     MutualFundRestore, EquityRestore, SnapshotRestore, GoalRestore,
@@ -43,6 +45,14 @@ def _reject_constant(name: str):
     raise ValueError(f"{name} is not valid JSON")
 
 
+def _upgraded_asset(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item  # _clean reports it
+    item = dict(item)
+    upgrade_asset(item)
+    return item
+
+
 def _clean(model: Type[BaseModel], item: Any, where: str) -> Dict[str, Any]:
     if not isinstance(item, dict):
         raise RestoreError(400, f"{where}: must be an object")
@@ -77,7 +87,10 @@ def parse_backup(raw: bytes) -> Dict[str, Any]:
         items = backup.get(section, [])
         if not isinstance(items, list):
             raise RestoreError(400, f"{section} must be a list")
-        cleaned[section] = [_clean(model, item, f"{section}[{i}]") for i, item in enumerate(items)]
+        if section == "assets":
+            # A backup from before a category was removed: its assets move as the data file's did
+            items = [_upgraded_asset(item) for item in items]
+        cleaned[section] =[_clean(model, item, f"{section}[{i}]") for i, item in enumerate(items)]
 
     for i, account in enumerate(cleaned["bank_accounts"]):
         start, maturity = account.get("start_date"), account.get("maturity_date")

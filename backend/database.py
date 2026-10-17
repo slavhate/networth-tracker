@@ -2,13 +2,56 @@ import json
 import math
 import os
 import stat
-from typing import Optional, List, Dict, Any
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime, timezone
 import uuid
 from config import settings
 
 def get_data_file_path() -> str:
     return settings.DATA_FILE
+
+# Asset categories that were removed, and what their rows became
+REMOVED_ASSET_CATEGORIES = frozenset({"sgb", "investments", "esop_rsu"})
+
+def upgrade_asset(asset: Dict) -> bool:
+    """Move an asset in a removed category to the one that replaced it, in place; True when it changed.
+
+    Sovereign Gold Bonds become 24K gold (one bond is one gram, so quantity and price stay); Investments become
+    Other; ESOP / RSU become Other valued at quantity × price (their quantity fields only fit gold and silver).
+    """
+    category = asset.get("category")
+    if category not in REMOVED_ASSET_CATEGORIES:
+        return False
+    if category == "sgb":
+        asset["category"] = "gold"
+        asset["purity"] = "24K"
+        return True
+    asset["category"] = "other"
+    quantity, unit_price = asset.get("quantity"), asset.get("unit_price")
+    if category == "esop_rsu" and quantity is not None and unit_price is not None:
+        asset["value"] = round(quantity * unit_price, 2)
+    if category == "esop_rsu":
+        asset["quantity"] = None
+        asset["unit_price"] = None
+    return True
+
+def upgrade_data(data: Dict[str, Any]) -> bool:
+    """Bring rows saved by older versions up to date, in place; True when anything changed."""
+    changed = False
+    for asset in data.get("assets", []):
+        changed = upgrade_asset(asset) or changed
+    return changed
+
+def upgrade_data_file() -> None:
+    """Save the data file once with older rows brought up to date (run at startup). Every load upgrades in memory
+    as well, so a file that can't be written now still reads correctly."""
+    data_file = get_data_file_path()
+    if not os.path.exists(data_file):
+        return
+    with open(data_file, 'r') as f:
+        data = json.load(f)
+    if upgrade_data(data):
+        save_data(data)
 
 def load_data() -> Dict[str, Any]:
     """Load data from JSON file"""
@@ -42,6 +85,7 @@ def load_data() -> Dict[str, Any]:
             data["equities"] = []
         if "goals" not in data:
             data["goals"] = []
+        upgrade_data(data)
         return data
 
 def save_data(data: Dict[str, Any]) -> None:
@@ -101,7 +145,7 @@ def _equity_numbers(quantity: float, avg_price: float, current_price: float) -> 
 # Optional fields a PUT may clear by sending null; any other null in an update is ignored
 ASSET_CLEARABLE = frozenset({"description", "annual_change_rate", "valuation_date", "monthly_contribution",
                              "interest_rate", "quantity", "unit_price", "yearly_contribution",
-                             "yearly_contribution_month", "nps_schemes", "nps_priced_through"})
+                             "yearly_contribution_month", "nps_schemes", "nps_priced_through", "purity"})
 LIABILITY_CLEARABLE = frozenset({"interest_rate", "description", "emi", "balance_date", "tenure_months", "emi_day"})
 BANK_ACCOUNT_CLEARABLE = frozenset({"branch", "ifsc_code", "interest_rate", "start_date", "maturity_date",
                                     "monthly_deposit"})
@@ -226,6 +270,24 @@ def delete_asset(asset_id: str, user_id: str) -> bool:
         save_data(data)
         return True
     return False
+
+def reprice_assets(user_id: str, reprice: Callable[[Dict], Optional[Dict]], user_updates: Dict) -> int:
+    """Apply `reprice` to each of the user's assets (it returns the changes for one, or None to leave it) and
+    `user_updates` to the user record, in a single save; the number of assets changed."""
+    data = load_data()
+    count = 0
+    for asset in data["assets"]:
+        if asset["user_id"] != user_id:
+            continue
+        changes = reprice(asset)
+        if changes:
+            _apply_update(asset, changes)
+            count += 1
+    for user in data["users"]:
+        if user["id"] == user_id:
+            user.update(user_updates)
+    save_data(data)
+    return count
 
 # Liability operations
 def get_liabilities_by_user(user_id: str) -> List[Dict]:

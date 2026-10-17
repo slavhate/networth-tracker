@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     DEMO_USERNAME: str = "demo"
     DEMO_PASSWORD: str = ""  # empty = a random password is generated when the demo user is created
     NPS_NAV_API_URL: str = "https://npsnav.in/api"  # NPS scheme list and NAV history (npsnav.in, or a mirror)
+    METAL_PRICE_API_URL: str = "https://api.gold-api.com/price"  # gold (XAU) and silver (XAG) spot, USD per troy ounce
+    # India's customs duty on gold and silver, % added to the international spot price (GST is not: market rates are
+    # quoted before GST)
+    METAL_IMPORT_DUTY_PCT: float = 6.0
 
     model_config = SettingsConfigDict(env_file=".env")
 
