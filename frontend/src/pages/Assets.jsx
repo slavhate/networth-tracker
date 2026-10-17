@@ -361,7 +361,7 @@ export default function Assets() {
             className="btn-secondary flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${refreshingMetals ? 'animate-spin' : ''}`} />
-            {refreshingMetals ? 'Refreshing...' : 'Refresh gold & silver rates'}
+            {refreshingMetals ? 'Refreshing...' : 'Refresh Rates'}
           </button>
           <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
             <Plus className="w-4 h-4" />
@@ -403,7 +403,7 @@ export default function Assets() {
           >
             {metalRates?.fetched_at
               ? `Gold 24K ${ratePerGram('gold')} · Silver 999 ${ratePerGram('silver')} · updated ${formatRatesTime(metalRates.fetched_at)}`
-              : 'Gold and silver rates not fetched yet: use Refresh gold & silver rates'}
+              : 'Gold and silver rates not fetched yet: use Refresh Rates'}
           </p>
         )}
       </div>
@@ -803,7 +803,7 @@ export default function Assets() {
                     {purities && metalPrice(metalRates, formData.category, formData.purity) != null && (
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                         Market rate {formatCurrency(metalPrice(metalRates, formData.category, formData.purity))}/g at this purity,
-                        fetched {formatRatesTime(metalRates.fetched_at)}. Refresh gold &amp; silver rates updates every gold and silver asset.
+                        fetched {formatRatesTime(metalRates.fetched_at)}. Refresh Rates updates every gold and silver asset.
                       </p>
                     )}
                   </div>
